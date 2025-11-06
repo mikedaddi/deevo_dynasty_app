@@ -1,0 +1,740 @@
+import React, { useState, useEffect, useCallback } from 'react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
+import { getFirestore, collection, query, where, onSnapshot, updateDoc, doc, addDoc, serverTimestamp, setLogLevel, setDoc, increment, collectionGroup, orderBy, limit } from 'firebase/firestore';
+import { RefreshCw, CheckCircle, Clock, Users, User, ArrowRight, Star, TrendingUp, BarChart, HelpCircle } from 'lucide-react';
+
+// Global Variables provided by the Canvas Environment
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+// --- Helper Hook for User Score Management ---
+const useUserScore = (db, userId) => {
+    const [score, setScore] = useState(0);
+
+    const scoreDocRef = db && userId ? doc(db, `artifacts/${appId}/users/${userId}/score/currentScore`) : null;
+
+    // Real-time listener for the score
+    useEffect(() => {
+        if (!scoreDocRef) return;
+
+        const unsubscribe = onSnapshot(scoreDocRef, (docSnap) => {
+            if (docSnap.exists()) {
+                setScore(docSnap.data().totalScore || 0);
+            } else {
+                // Initialize score document if it doesn't exist
+                setScore(0);
+                setDoc(scoreDocRef, { totalScore: 0, initializedAt: serverTimestamp() }).catch(e => console.error("Error initializing score doc:", e));
+            }
+        }, (error) => {
+            console.error("Error fetching score:", error);
+        });
+
+        return unsubscribe;
+    }, [scoreDocRef]);
+
+    // Function to update the score (atomic increment)
+    const updateUserScore = async (points) => {
+        if (!scoreDocRef || points <= 0) return;
+
+        try {
+            await updateDoc(scoreDocRef, {
+                totalScore: increment(points)
+            });
+            console.log(`Awarded ${points} DDP.`);
+        } catch (error) {
+            console.error("Error updating user score:", error);
+        }
+    };
+
+    return { score, updateUserScore };
+};
+
+// --- Helper Hook for Global Leaderboard ---
+const useLeaderboard = (db, isReady) => {
+    const [leaderboard, setLeaderboard] = useState([]);
+
+    useEffect(() => {
+        // Only proceed if the database is initialized and ready
+        if (!db || !isReady) return;
+
+        // Use a collection group query to find all 'currentScore' documents across all user paths
+        const scoresRef = collectionGroup(db, 'currentScore');
+        // Fetch up to 100 documents and sort them client-side to avoid complex index requirements for collectionGroup queries.
+        const q = query(scoresRef, limit(100)); 
+
+        const unsubscribe = onSnapshot(q, (snapshot) => {
+            const data = snapshot.docs.map(doc => {
+                // Extract the userId from the document path
+                const pathParts = doc.ref.path.split('/');
+                const userId = pathParts[pathParts.indexOf('users') + 1];
+
+                return {
+                    userId,
+                    score: doc.data().totalScore || 0,
+                };
+            });
+            
+            // Sort client-side to ensure top 10 is correctly ranked
+            const sortedData = data.sort((a, b) => b.score - a.score).slice(0, 10);
+            setLeaderboard(sortedData);
+        }, (error) => {
+            console.error("Error fetching leaderboard:", error);
+        });
+
+        return unsubscribe;
+    }, [db, isReady]);
+
+    return leaderboard;
+};
+
+// --- Helper Hook for Dashboard Metrics (Point Breakdown) ---
+const useMissionMetrics = (db, userId, myMissions) => {
+    const [metrics, setMetrics] = useState({ soloPoints: 0, dualPoints: 0, completedCount: 0 });
+
+    useEffect(() => {
+        if (!myMissions || myMissions.length === 0) {
+            setMetrics({ soloPoints: 0, dualPoints: 0, completedCount: 0 });
+            return;
+        }
+
+        let soloP = 0;
+        let dualP = 0;
+        let count = 0;
+
+        myMissions.forEach(mission => {
+            if (mission.completed) {
+                count++;
+                if (mission.type === 'Solo') {
+                    soloP += mission.points;
+                } else if (mission.type === 'Dual') {
+                    dualP += mission.points;
+                }
+            }
+        });
+
+        setMetrics({
+            soloPoints: soloP,
+            dualPoints: dualP,
+            completedCount: count,
+        });
+
+    }, [myMissions]);
+
+    return metrics;
+};
+
+// --- Dashboard Component ---
+const Dashboard = ({ totalScore, metrics, leaderboard, currentUserId }) => {
+    const { soloPoints, dualPoints, completedCount } = metrics;
+    const totalPoints = soloPoints + dualPoints;
+    const soloPercentage = totalPoints > 0 ? (soloPoints / totalPoints) * 100 : 0;
+    const dualPercentage = totalPoints > 0 ? (dualPoints / totalPoints) * 100 : 0;
+
+    return (
+        <div className="space-y-8">
+            <h2 className="text-3xl font-bold text-indigo-700 flex items-center mb-4">
+                <TrendingUp className="w-6 h-6 mr-2" /> Dynasty Performance Dashboard
+            </h2>
+
+            {/* Total Score Card */}
+            <div className="bg-white p-6 rounded-xl shadow-lg ring-4 ring-yellow-300/50">
+                <div className="flex items-center justify-between">
+                    <p className="text-xl font-medium text-gray-500">Total Deevo Dynasty Points (DDP)</p>
+                    <Star className="w-8 h-8 text-yellow-500 fill-yellow-500" />
+                </div>
+                <p className="text-5xl font-extrabold text-indigo-800 mt-1">{totalScore}</p>
+                <p className="text-sm text-gray-500 mt-2">Earned through {completedCount} completed missions.</p>
+            </div>
+
+            {/* Leaderboard Card */}
+            <div className="bg-white p-6 rounded-xl shadow-lg">
+                <h3 className="text-xl font-semibold text-gray-700 mb-4 flex items-center">
+                    <Star className="w-5 h-5 mr-2 text-yellow-500 fill-yellow-500" /> Dynasty Leaderboard (Top 10)
+                </h3>
+                
+                {leaderboard.length > 0 ? (
+                    <div className="space-y-2">
+                        {leaderboard.map((user, index) => (
+                            <div key={user.userId} className={`flex justify-between items-center p-3 rounded-xl transition-all duration-200 ${user.userId === currentUserId ? 'bg-indigo-100 font-bold ring-2 ring-indigo-400' : 'bg-gray-50 hover:bg-gray-100'}`}>
+                                <span className={`w-10 text-center font-extrabold text-lg ${index < 3 ? 'text-yellow-600' : 'text-gray-500'}`}>
+                                    #{index + 1}
+                                </span>
+                                <span className="flex-1 truncate mx-4 text-gray-700">
+                                    {user.userId === currentUserId ? 'YOU (Your ID)' : `User ID: ${user.userId}`}
+                                </span>
+                                <span className="text-xl text-indigo-700 font-bold">
+                                    {user.score} DDP
+                                </span>
+                            </div>
+                        ))}
+                    </div>
+                ) : (
+                    <p className="text-gray-500 italic">No global scores found yet. Complete a mission to join the Leaderboard!</p>
+                )}
+            </div>
+            
+
+            {/* Breakdown Card */}
+            <div className="bg-white p-6 rounded-xl shadow-lg">
+                <h3 className="text-xl font-semibold text-gray-700 mb-4 flex items-center">
+                    <BarChart className="w-5 h-5 mr-2 text-purple-500" /> Score Breakdown by Mission Type
+                </h3>
+
+                {totalPoints > 0 ? (
+                    <>
+                        {/* Progress Bar Chart */}
+                        <div className="h-6 bg-gray-200 rounded-full flex overflow-hidden mb-6 shadow-inner">
+                            <div 
+                                style={{ width: `${soloPercentage}%` }} 
+                                className="bg-blue-500 transition-all duration-700 ease-out"
+                                title={`Solo: ${soloPercentage.toFixed(1)}%`}
+                            ></div>
+                            <div 
+                                style={{ width: `${dualPercentage}%` }} 
+                                className="bg-purple-500 transition-all duration-700 ease-out"
+                                title={`Dual: ${dualPercentage.toFixed(1)}%`}
+                            ></div>
+                        </div>
+
+                        {/* Detailed Metrics */}
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div className="p-4 bg-blue-50 rounded-lg border border-blue-200 shadow-sm">
+                                <p className="text-blue-600 font-bold text-xl">{soloPoints} DDP</p>
+                                <p className="text-gray-600 text-sm">from **Solo Missions**</p>
+                                <p className="text-xs text-gray-400 mt-1">{soloPercentage.toFixed(1)}% of total earned points</p>
+                            </div>
+                            <div className="p-4 bg-purple-50 rounded-lg border border-purple-200 shadow-sm">
+                                <p className="text-purple-600 font-bold text-xl">{dualPoints} DDP</p>
+                                <p className="text-gray-600 text-sm">from **Dual Missions**</p>
+                                <p className="text-xs text-gray-400 mt-1">{dualPercentage.toFixed(1)}% of total earned points</p>
+                            </div>
+                        </div>
+                    </>
+                ) : (
+                    <p className="text-gray-500 italic">Complete your first mission to see your score breakdown!</p>
+                )}
+            </div>
+        </div>
+    );
+};
+
+
+// --- Mission Item Component ---
+
+const MissionItem = ({ mission, userId, db, isPartnerAction = false, updateUserScore }) => {
+    const isDual = mission.type === 'Dual';
+    const isSolo = mission.type === 'Solo';
+    const isComplete = mission.completed;
+    const missionPoints = mission.points || 0;
+
+    // --- Handlers for Firestore Updates ---
+
+    // 1. Solo Mission Completion (Updates private collection & awards points)
+    const handleSoloComplete = async () => {
+        if (!isSolo || isComplete) return;
+
+        const missionRef = doc(db, `artifacts/${appId}/users/${userId}/missions`, mission.id);
+        
+        try {
+            await updateDoc(missionRef, {
+                completed: true,
+                completedAt: serverTimestamp(),
+            });
+            updateUserScore(missionPoints);
+        } catch (error) {
+            console.error("Error updating solo mission completion:", error);
+        }
+    };
+
+    // 2. Initiator Confirmation for Dual Mission (Updates public collection & potentially awards points)
+    const handleInitiatorComplete = async () => {
+        if (!isDual || isComplete) return;
+
+        const missionRef = doc(db, `artifacts/${appId}/public/data/dualMissions`, mission.id);
+        const willBeComplete = mission.partnerConfirmed;
+        
+        try {
+            await updateDoc(missionRef, {
+                initiatorConfirmed: true,
+                completed: willBeComplete, 
+                completedAt: willBeComplete ? serverTimestamp() : null,
+            });
+
+            if (willBeComplete) {
+                // Award points to the initiator
+                updateUserScore(missionPoints);
+            }
+        } catch (error) {
+            console.error("Error updating initiator confirmation:", error);
+        }
+    };
+
+    // 3. Partner Confirmation for Dual Mission (Updates public collection & potentially awards points)
+    const handlePartnerConfirm = async () => {
+        if (!isDual || isComplete) return;
+
+        const missionRef = doc(db, `artifacts/${appId}/public/data/dualMissions`, mission.id);
+        const willBeComplete = mission.initiatorConfirmed;
+
+        try {
+            await updateDoc(missionRef, {
+                partnerConfirmed: true,
+                completed: willBeComplete, 
+                completedAt: willBeComplete ? serverTimestamp() : null,
+            });
+
+            if (willBeComplete) {
+                 // Award points to the current user (the partner)
+                 updateUserScore(missionPoints);
+            }
+        } catch (error) {
+            console.error("Error updating partner confirmation:", error);
+        }
+    };
+
+    // --- Status and Display Logic ---
+    let statusText = 'Pending';
+    let statusIcon = Clock;
+    let statusColor = 'text-gray-500';
+
+    if (isComplete) {
+        statusText = 'Completed';
+        statusIcon = CheckCircle;
+        statusColor = 'text-green-600';
+    } else if (isSolo) {
+        statusText = 'Ready to Complete';
+        statusColor = 'text-blue-500';
+        statusIcon = User;
+    } else if (isDual) {
+        if (isPartnerAction) {
+            if (mission.initiatorConfirmed) {
+                statusText = 'Ready for Your Confirmation';
+                statusColor = 'text-yellow-600';
+                statusIcon = ArrowRight;
+            }
+        } else {
+            if (mission.initiatorConfirmed && !mission.partnerConfirmed) {
+                statusText = 'Waiting for Partner Confirmation';
+                statusColor = 'text-orange-500';
+                statusIcon = Users;
+            } else if (!mission.initiatorConfirmed) {
+                 statusText = 'Needs Your Completion';
+                statusColor = 'text-blue-500';
+                statusIcon = User;
+            }
+        }
+    }
+
+    const StatusIcon = statusIcon;
+
+    return (
+        <div className={`p-4 mb-3 rounded-xl shadow-md flex flex-col sm:flex-row items-start sm:items-center justify-between transition-all duration-300 ${isComplete ? 'bg-green-50 ring-2 ring-green-200' : 'bg-white hover:shadow-lg'}`}>
+            <div className="flex-1 min-w-0 mb-2 sm:mb-0">
+                <p className="font-semibold text-lg text-gray-800 truncate">{mission.title}</p>
+                <div className="flex items-center text-sm mt-1 space-x-2 flex-wrap">
+                    <span className={`flex items-center font-medium ${statusColor}`}>
+                        <StatusIcon className="w-4 h-4 mr-1" />
+                        {statusText}
+                    </span>
+                    <span className="text-gray-400 hidden sm:inline">|</span>
+                    <span className={`font-medium ${isDual ? 'text-purple-600' : 'text-indigo-600'}`}>{isDual ? `Dual Mission (${missionPoints} DDP)` : `Solo Mission (${missionPoints} DDP)`}</span>
+                    {isDual && mission.partnerId && (
+                        <span className="text-gray-400 hidden sm:inline">({`Partner ID: ${mission.partnerId}`})</span>
+                    )}
+                </div>
+            </div>
+
+            <div className="sm:ml-4 flex-shrink-0">
+                {/* 1. Partner Action Button (Confirmation View) */}
+                {isPartnerAction && mission.initiatorConfirmed && !isComplete && (
+                    <button
+                        onClick={handlePartnerConfirm}
+                        className="bg-green-500 hover:bg-green-600 text-white font-bold py-2 px-4 rounded-lg shadow-lg transition-colors w-full sm:w-auto"
+                    >
+                        Confirm Mission
+                    </button>
+                )}
+
+                {/* 2. Initiator Action Button for Dual Mission (My Missions View) */}
+                {!isPartnerAction && isDual && !mission.initiatorConfirmed && !isComplete && (
+                    <button
+                        onClick={handleInitiatorComplete}
+                        className="bg-indigo-500 hover:bg-indigo-600 text-white font-bold py-2 px-4 rounded-lg shadow-lg transition-colors w-full sm:w-auto"
+                    >
+                        Complete My Step
+                    </button>
+                )}
+                
+                {/* 3. Solo Mission Completion Button (My Missions View) */}
+                {!isPartnerAction && isSolo && !isComplete && (
+                    <button
+                        onClick={handleSoloComplete} 
+                        className="bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded-lg shadow-lg transition-colors w-full sm:w-auto"
+                    >
+                        Mark Solo Complete
+                    </button>
+                )}
+            </div>
+        </div>
+    );
+};
+
+// --- Main Application Component ---
+
+const App = () => {
+    const [db, setDb] = useState(null);
+    const [auth, setAuth] = useState(null);
+    const [userId, setUserId] = useState(null);
+    const [isLoading, setIsLoading] = useState(true);
+    const [activeTab, setActiveTab] = useState('dashboard'); 
+    const [myMissions, setMyMissions] = useState([]);
+    const [partnerConfirmations, setPartnerConfirmations] = useState([]);
+
+    // State for simulating other users' IDs for testing
+    const [partnerIdInput, setPartnerIdInput] = useState('');
+    const [simulatedPartnerId, setSimulatedPartnerId] = useState(null);
+    const partnerIdToUse = simulatedPartnerId || userId;
+
+    const handleSimulatePartner = (e) => {
+        e.preventDefault();
+        if (partnerIdInput && partnerIdInput !== userId) {
+             setSimulatedPartnerId(partnerIdInput);
+        } else if (partnerIdInput === userId) {
+             console.error("Cannot simulate your own ID as a partner. Please use a different ID.");
+             setSimulatedPartnerId(null);
+        } else {
+             setSimulatedPartnerId(null); // Clear simulation
+        }
+        setPartnerIdInput('');
+    };
+
+    // Function to handle the help link click (Mock Link)
+    const handleHelpClick = () => {
+        window.open('https://dynastyandlegacy.blogspot.com/p/help.html', '_blank');
+    };
+
+    // 1. Firebase Initialization and Authentication
+    useEffect(() => {
+        if (!firebaseConfig) {
+            console.error("Firebase config is missing.");
+            setIsLoading(false);
+            return;
+        }
+
+        setLogLevel('Debug');
+        const appInstance = initializeApp(firebaseConfig);
+        const authInstance = getAuth(appInstance);
+        const dbInstance = getFirestore(appInstance);
+
+        setAuth(authInstance);
+        setDb(dbInstance);
+
+        const initAuth = async () => {
+            try {
+                if (initialAuthToken) {
+                    await signInWithCustomToken(authInstance, initialAuthToken);
+                } else {
+                    await signInAnonymously(authInstance);
+                }
+            } catch (error) {
+                console.error("Authentication Error:", error);
+            }
+        };
+        initAuth();
+
+        const unsubscribeAuth = onAuthStateChanged(authInstance, (user) => {
+            if (user) {
+                setUserId(user.uid);
+            } else {
+                setUserId(crypto.randomUUID()); // Use a random ID if unauthenticated
+            }
+            setIsLoading(false);
+        });
+
+        return () => unsubscribeAuth();
+    }, []);
+
+    // Hook to manage the user's score and point distribution
+    const { score, updateUserScore } = useUserScore(db, userId);
+    
+    // Global readiness flag for fetching leaderboard data
+    const isReadyForGlobalFetch = !isLoading && db;
+
+    // Hook to calculate the breakdown of points from completed missions
+    const metrics = useMissionMetrics(db, userId, myMissions);
+    
+    // Hook for the Leaderboard
+    const leaderboard = useLeaderboard(db, isReadyForGlobalFetch);
+
+
+    // 2. Real-time Firestore Listeners
+    useEffect(() => {
+        if (!db || !userId) return;
+
+        console.log(`Setting up listeners for user: ${userId}`);
+
+        // Define collections
+        const publicDualMissionsRef = collection(db, `artifacts/${appId}/public/data/dualMissions`);
+        const privateMissionsRef = collection(db, `artifacts/${appId}/users/${userId}/missions`);
+        
+        let dualMissions = [];
+
+        // 1. Dual Missions where I am the initiator
+        const qMyDual = query(publicDualMissionsRef, where("initiatorId", "==", userId));
+        const unsubscribeDual = onSnapshot(qMyDual, (snapshot) => {
+            dualMissions = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data(), type: 'Dual', points: doc.data().points || 25 }));
+            // Merge with existing solo missions
+            setMyMissions(prevMissions => [...prevMissions.filter(m => m.type === 'Solo'), ...dualMissions]);
+        }, (error) => {
+            console.error("Error fetching my dual missions:", error);
+        });
+        
+        // 2. Solo Missions from my private collection
+        const unsubscribeSolo = onSnapshot(query(privateMissionsRef), (snapshot) => {
+            const soloMissions = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data(), type: 'Solo', points: doc.data().points || 10 }));
+            // Merge with existing dual missions (ensuring we don't duplicate listeners)
+            setMyMissions(soloMissions.concat(dualMissions)); 
+        }, (error) => {
+             console.error("Error fetching my solo missions:", error);
+        });
+
+
+        // --- Listener B: Partner Confirmations (Missions others need me to confirm) ---
+        // Query public dual missions where I am the partner AND the initiator has completed their part
+        const qPartnerConfirmations = query(
+            publicDualMissionsRef, 
+            where("partnerId", "==", userId), 
+            where("partnerConfirmed", "==", false)
+        );
+
+        const unsubscribePartner = onSnapshot(qPartnerConfirmations, (snapshot) => {
+            // Filter client-side to ensure only missions needing *my* confirmation show up (initiator must be done)
+            const confirmations = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data(), type: 'Dual', points: doc.data().points || 25 }))
+                                    .filter(mission => mission.initiatorConfirmed === true && mission.initiatorId !== userId); 
+            setPartnerConfirmations(confirmations);
+        }, (error) => {
+            console.error("Error fetching partner confirmations:", error);
+        });
+
+
+        return () => {
+            unsubscribeDual();
+            unsubscribeSolo();
+            unsubscribePartner();
+        };
+    }, [db, userId]);
+
+
+    // --- Add Mission Function (for testing) ---
+    const addTestMission = async (type) => {
+        if (!db || !userId) return;
+
+        const baseMissionData = {
+            points: type === 'Solo' ? 10 : 25,
+            type: type,
+            completed: false,
+            timestamp: serverTimestamp(),
+        };
+
+        try {
+            if (type === 'Solo') {
+                const soloData = {
+                    ...baseMissionData,
+                    title: `Solo Challenge: Inner Strength (${Date.now() % 1000})`,
+                };
+                await addDoc(collection(db, `artifacts/${appId}/users/${userId}/missions`), soloData);
+            } else {
+                // Dual Mission requires an initiator and a partner (can be the same for testing)
+                const partnerIDForMission = partnerIdToUse || userId;
+
+                // Warning/Error for creating a dual mission with self
+                if (partnerIDForMission === userId) {
+                     console.warn("Dual mission created with current user as both initiator and partner. Set a simulated partner ID for real dual testing.");
+                }
+
+                const dualData = {
+                    ...baseMissionData,
+                    title: `Dual Task: Legacy Building (${Date.now() % 1000})`,
+                    initiatorId: userId,
+                    partnerId: partnerIDForMission, 
+                    initiatorConfirmed: false,
+                    partnerConfirmed: false,
+                };
+                await addDoc(collection(db, `artifacts/${appId}/public/data/dualMissions`), dualData);
+            }
+        } catch (error) {
+            console.error(`Error adding ${type} mission:`, error);
+        }
+    };
+
+
+    if (isLoading) {
+        return (
+            <div className="flex justify-center items-center h-screen bg-gray-50">
+                <RefreshCw className="w-8 h-8 text-indigo-500 animate-spin" />
+                <p className="ml-3 text-indigo-700">Loading Family Tracker...</p>
+            </div>
+        );
+    }
+
+    // Sort missions: Pending first, then Completed, then by timestamp
+    const sortedMyMissions = [...myMissions].sort((a, b) => {
+        if (a.completed !== b.completed) {
+            return a.completed ? 1 : -1; // Pending (false) comes first
+        }
+        // Fallback to sort by most recent timestamp if available
+        const aTimestamp = a.timestamp?.toMillis() || 0;
+        const bTimestamp = b.timestamp?.toMillis() || 0;
+        return bTimestamp - aTimestamp;
+    });
+
+    return (
+        <div className="min-h-screen p-4 md:p-8 bg-gray-50 font-sans">
+            <div className="max-w-4xl mx-auto">
+                
+                <header className="mb-8 pb-4 border-b border-indigo-200">
+                    <div className="flex justify-between items-start">
+                         <h1 className="text-4xl font-extrabold text-indigo-800 mb-2">Deevo Dynasty Code Tracker</h1>
+                         <button
+                            onClick={handleHelpClick}
+                            className="flex items-center bg-indigo-500 hover:bg-indigo-600 text-white text-sm font-medium py-2 px-3 rounded-lg shadow-md transition-colors whitespace-nowrap"
+                        >
+                            <HelpCircle className="w-4 h-4 mr-1" />
+                            Help & Support
+                        </button>
+                    </div>
+
+                    <div className="flex justify-start items-center space-x-4 mt-2">
+                         <div className="flex items-center bg-yellow-100 text-yellow-800 p-2 px-4 rounded-full font-bold shadow-md">
+                            <Star className="w-5 h-5 mr-2 fill-yellow-500 text-yellow-500" />
+                            Total DDP: {score}
+                        </div>
+                        <p className="text-sm text-indigo-600 break-all">
+                            User ID: <span className="font-mono bg-indigo-100 px-2 py-0.5 rounded-md text-xs sm:text-sm">{userId}</span>
+                        </p>
+                    </div>
+
+                    {simulatedPartnerId && (
+                        <p className="text-xs text-red-500 mt-1">
+                            ⚠️ Mission Partner ID Set To: <span className="font-mono">{simulatedPartnerId}</span> (Empty input clears this)
+                        </p>
+                    )}
+                </header>
+
+                {/* Simulation Panel */}
+                <div className="p-4 mb-8 bg-indigo-50 border border-indigo-200 rounded-xl shadow-inner">
+                    <h2 className="text-xl font-semibold text-indigo-700 mb-3">Mission Control (Testing)</h2>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
+                        <button 
+                            onClick={() => addTestMission('Solo')}
+                            className="bg-blue-500 hover:bg-blue-600 text-white font-medium py-2 rounded-lg transition-colors shadow-md transform hover:scale-[1.02]"
+                        >
+                            Add Solo Mission (10 DDP)
+                        </button>
+                        <button 
+                            onClick={() => addTestMission('Dual')}
+                            className="bg-purple-500 hover:bg-purple-600 text-white font-medium py-2 rounded-lg transition-colors shadow-md transform hover:scale-[1.02]"
+                        >
+                            Add Dual Mission (25 DDP)
+                        </button>
+                    </div>
+
+                    <form onSubmit={handleSimulatePartner} className="flex flex-col sm:flex-row space-y-2 sm:space-y-0 sm:space-x-2 mt-4">
+                        <input 
+                            type="text" 
+                            value={partnerIdInput}
+                            onChange={(e) => setPartnerIdInput(e.target.value)}
+                            placeholder="Paste a full Partner's User ID here"
+                            className="flex-1 p-2 border border-indigo-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
+                        />
+                        <button 
+                            type="submit"
+                            className="bg-indigo-500 hover:bg-indigo-600 text-white font-medium py-2 px-4 rounded-lg transition-colors shadow-md"
+                        >
+                            Set/Clear Partner ID
+                        </button>
+                    </form>
+                </div>
+
+
+                {/* Tab Navigation */}
+                <div className="flex border-b border-gray-200 mb-6">
+                    <button
+                        className={`py-3 px-3 sm:px-6 text-base sm:text-lg font-medium transition-colors ${activeTab === 'dashboard' ? 'border-b-4 border-indigo-600 text-indigo-700' : 'text-gray-500 hover:text-gray-700'}`}
+                        onClick={() => setActiveTab('dashboard')}
+                    >
+                        Dashboard
+                    </button>
+                    <button
+                        className={`py-3 px-3 sm:px-6 text-base sm:text-lg font-medium transition-colors ${activeTab === 'myMissions' ? 'border-b-4 border-indigo-600 text-indigo-700' : 'text-gray-500 hover:text-gray-700'}`}
+                        onClick={() => setActiveTab('myMissions')}
+                    >
+                        My Missions ({myMissions.length})
+                    </button>
+                    <button
+                        className={`py-3 px-3 sm:px-6 text-base sm:text-lg font-medium transition-colors ${activeTab === 'partnerConfirmations' ? 'border-b-4 border-indigo-600 text-indigo-700' : 'text-gray-500 hover:text-gray-700'}`}
+                        onClick={() => setActiveTab('partnerConfirmations')}
+                    >
+                        Confirmations ({partnerConfirmations.length})
+                    </button>
+                </div>
+
+
+                {/* Main Content Render */}
+                <div id="mission-list-content">
+                    {activeTab === 'dashboard' && <Dashboard 
+                        totalScore={score} 
+                        metrics={metrics} 
+                        leaderboard={leaderboard} 
+                        currentUserId={userId} 
+                    />}
+
+                    {activeTab === 'myMissions' && (
+                        <div className="space-y-4">
+                            <h2 className="text-2xl font-bold text-gray-700 mb-4">My Initiated Missions (Solo & Dual)</h2>
+                            {sortedMyMissions.length > 0 ? (
+                                sortedMyMissions.map(mission => (
+                                    <MissionItem 
+                                        key={mission.id} 
+                                        mission={mission} 
+                                        userId={userId} 
+                                        db={db}
+                                        isPartnerAction={false}
+                                        updateUserScore={updateUserScore}
+                                    />
+                                ))
+                            ) : (
+                                <p className="text-gray-400 italic p-4 bg-white rounded-xl shadow-md">No missions started by you. Use the Mission Control panel to add a new mission!</p>
+                            )}
+                        </div>
+                    )}
+
+                    {activeTab === 'partnerConfirmations' && (
+                        <div className="space-y-4">
+                            <h2 className="text-2xl font-bold text-gray-700 mb-4">Missions Requiring Your Confirmation</h2>
+                            {partnerConfirmations.length > 0 ? (
+                                partnerConfirmations.map(mission => (
+                                    <MissionItem 
+                                        key={mission.id} 
+                                        mission={mission} 
+                                        userId={userId} 
+                                        db={db}
+                                        isPartnerAction={true}
+                                        updateUserScore={updateUserScore}
+                                    />
+                                ))
+                            ) : (
+                                <p className="text-gray-400 italic p-4 bg-white rounded-xl shadow-md">No missions currently require your confirmation.</p>
+                            )}
+                        </div>
+                    )}
+                </div>
+
+            </div>
+        </div>
+    );
+};
+
+export default App;
