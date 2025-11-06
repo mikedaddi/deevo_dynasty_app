@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Deevo Dynasty Code Tracker</title>
+
     <!-- Load Tailwind CSS for styling -->
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
@@ -17,672 +18,314 @@
     <!-- Babel is required to process the JSX/ES6 in the browser -->
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
-    <!-- Load Firebase CDNs -->
+    <!-- Load Firebase CDNS -->
     <script src="https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js"></script>
     <script src="https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js"></script>
     <script src="https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js"></script>
-
+    
     <!-- Load Lucide Icons CDN for visual appeal -->
     <script src="https://unpkg.com/lucide@latest"></script>
+
 </head>
 <body>
     <div id="root">
         <!-- React App mounts here -->
-        <div class="flex justify-center items-center h-screen bg-gray-50">
-            <svg class="w-8 h-8 text-indigo-500 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M21 12a9 9 0 0 0-9-9-3 3 0 0 1 3 3v3a3 3 0 0 0 3 3h3a9 9 0 0 0 0 6z" />
-            </svg>
-            <p class="ml-3 text-indigo-700">Initializing Application...</p>
+        <div class="flex justify-center items-center h-screen bg-gray-100">
+            <p class="text-lg text-gray-500">Loading application...</p>
         </div>
     </div>
 
     <script type="text/babel">
-        // IMPORTANT: Because we are using CDNs, we must access Firebase modules via global variables.
-        const { useState, useEffect, useCallback } = React;
-        const { initializeApp } = firebase.app;
+        const { useState, useEffect, useCallback, useMemo } = React;
+        const { initializeApp } = firebase;
         const { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } = firebase.auth;
-        const { getFirestore, collection, query, where, onSnapshot, updateDoc, doc, addDoc, serverTimestamp, setLogLevel, setDoc, increment, collectionGroup, limit } = firebase.firestore;
+        const { getFirestore, doc, setDoc, onSnapshot, collection, query, where, updateDoc } = firebase.firestore;
+        const { Bell, CheckSquare, XCircle, ChevronRight, Loader2 } = lucide;
 
-        // Mock global variables as they are not available in the plain browser environment
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : { /* Mock Config for safety */ };
-        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+        // Global variables initialized outside React scope
+        const firebaseConfig = JSON.parse(__firebase_config);
+        // *** REPLACE 'pikaverse-alliance-96839' with YOUR Project ID ***
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'pikaverse-alliance-96839'; 
 
-        // --- Helper Components for Icons ---
-        // Using Lucide icons by rendering SVGs directly since we can't use 'lucide-react' imports here
-        const LucideIcon = ({ name, className }) => {
-            if (!lucide.icons[name]) return null;
-            const iconSvg = lucide.icons[name].toSvg({ class: className });
-            return <span dangerouslySetInnerHTML={{ __html: iconSvg }} />;
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+        const auth = getAuth(app);
+        
+        // Set Firebase Logging level
+        firebase.firestore.setLogLevel('debug');
+
+        const MISSION_POINTS = 100;
+        const MISSION_STATUS = {
+            PENDING: 'PENDING',
+            COMPLETED: 'COMPLETED',
+            FAILED: 'FAILED'
         };
-        const RefreshCw = (props) => <LucideIcon name="refresh-cw" {...props} />;
-        const CheckCircle = (props) => <LucideIcon name="check-circle" {...props} />;
-        const Clock = (props) => <LucideIcon name="clock" {...props} />;
-        const Users = (props) => <LucideIcon name="users" {...props} />;
-        const User = (props) => <LucideIcon name="user" {...props} />;
-        const ArrowRight = (props) => <LucideIcon name="arrow-right" {...props} />;
-        const Star = (props) => <LucideIcon name="star" {...props} />;
-        const TrendingUp = (props) => <LucideIcon name="trending-up" {...props} />;
-        const BarChart = (props) => <LucideIcon name="bar-chart" {...props} />;
-        const HelpCircle = (props) => <LucideIcon name="help-circle" {...props} />;
 
-        // --- Helper Hook for User Score Management (Logic is preserved) ---
-        const useUserScore = (db, userId) => {
-            const [score, setScore] = useState(0);
-            const scoreDocRef = db && userId ? doc(db, `artifacts/${appId}/users/${userId}/score/currentScore`) : null;
+        const initialMissions = [
+            { id: 'mission1', title: 'Implement Signal Handling', description: 'Write code to manage two unique user signals.', type: 'core', points: MISSION_POINTS },
+            { id: 'mission2', title: 'Secure Data Transmission', description: 'Implement an encryption function for all outgoing data.', type: 'core', points: MISSION_POINTS },
+            { id: 'mission3', title: 'Optimize Loop Efficiency', description: 'Refactor a standard `for` loop into a high-performance array method.', type: 'core', points: MISSION_POINTS },
+            { id: 'mission4', title: 'Setup CI/CD Pipeline', description: 'Configure an automated build and deployment process.', type: 'side', points: MISSION_POINTS },
+            { id: 'mission5', title: 'Automated Testing Suite', description: 'Create and pass 10 unit tests for core functionalities.', type: 'side', points: MISSION_POINTS },
+            { id: 'mission6', title: 'Documentation Generation', description: 'Generate comprehensive documentation for all major functions.', type: 'side', points: MISSION_POINTS },
+        ];
 
-            useEffect(() => {
-                if (!scoreDocRef) return;
-                const unsubscribe = onSnapshot(scoreDocRef, (docSnap) => {
-                    if (docSnap.exists()) {
-                        setScore(docSnap.data().totalScore || 0);
-                    } else {
-                        setScore(0);
-                        setDoc(scoreDocRef, { totalScore: 0, initializedAt: serverTimestamp() }).catch(e => console.error("Error initializing score doc:", e));
-                    }
-                }, (error) => {
-                    console.error("Error fetching score:", error);
-                });
-                return unsubscribe;
-            }, [scoreDocRef]);
+        const MissionItem = ({ mission, userMissions, userId, dbInstance }) => {
+            const status = userMissions[mission.id]?.status || MISSION_STATUS.PENDING;
 
-            const updateUserScore = async (points) => {
-                if (!scoreDocRef || points <= 0) return;
+            const handleUpdateStatus = async (newStatus) => {
+                if (!userId || !dbInstance) return console.error("Database not ready.");
+
+                const missionRef = doc(dbInstance, 'artifacts', appId, 'users', userId, 'missions', mission.id);
+
                 try {
-                    await updateDoc(scoreDocRef, { totalScore: increment(points) });
-                    console.log(`Awarded ${points} DDP.`);
+                    await setDoc(missionRef, {
+                        status: newStatus,
+                        timestamp: new Date(),
+                        points: newStatus === MISSION_STATUS.COMPLETED ? mission.points : 0
+                    }, { merge: true });
+
                 } catch (error) {
-                    console.error("Error updating user score:", error);
+                    console.error("Error updating mission status:", error);
                 }
             };
-            return { score, updateUserScore };
-        };
 
-        // --- Helper Hook for Global Leaderboard (Logic is preserved) ---
-        const useLeaderboard = (db, isReady) => {
-            const [leaderboard, setLeaderboard] = useState([]);
-            useEffect(() => {
-                if (!db || !isReady) return;
-                const scoresRef = collectionGroup(db, 'currentScore');
-                const q = query(scoresRef, limit(100)); 
-
-                const unsubscribe = onSnapshot(q, (snapshot) => {
-                    const data = snapshot.docs.map(doc => {
-                        const pathParts = doc.ref.path.split('/');
-                        const userId = pathParts[pathParts.indexOf('users') + 1];
-
-                        return {
-                            userId,
-                            score: doc.data().totalScore || 0,
-                        };
-                    });
-                    const sortedData = data.sort((a, b) => b.score - a.score).slice(0, 10);
-                    setLeaderboard(sortedData);
-                }, (error) => {
-                    console.error("Error fetching leaderboard:", error);
-                });
-                return unsubscribe;
-            }, [db, isReady]);
-            return leaderboard;
-        };
-
-        // --- Helper Hook for Dashboard Metrics (Logic is preserved) ---
-        const useMissionMetrics = (db, userId, myMissions) => {
-            const [metrics, setMetrics] = useState({ soloPoints: 0, dualPoints: 0, completedCount: 0 });
-            useEffect(() => {
-                if (!myMissions || myMissions.length === 0) {
-                    setMetrics({ soloPoints: 0, dualPoints: 0, completedCount: 0 });
-                    return;
+            const getIcon = (status) => {
+                switch (status) {
+                    case MISSION_STATUS.COMPLETED:
+                        return <CheckSquare className="w-5 h-5 text-green-500" />;
+                    case MISSION_STATUS.FAILED:
+                        return <XCircle className="w-5 h-5 text-red-500" />;
+                    default:
+                        return <ChevronRight className="w-5 h-5 text-gray-400" />;
                 }
-                let soloP = 0;
-                let dualP = 0;
-                let count = 0;
-                myMissions.forEach(mission => {
-                    if (mission.completed) {
-                        count++;
-                        if (mission.type === 'Solo') {
-                            soloP += mission.points;
-                        } else if (mission.type === 'Dual') {
-                            dualP += mission.points;
-                        }
-                    }
-                });
-                setMetrics({ soloPoints: soloP, dualPoints: dualP, completedCount: count });
-            }, [myMissions]);
-            return metrics;
-        };
+            };
 
-        // --- Dashboard Component (Logic is preserved) ---
-        const Dashboard = ({ totalScore, metrics, leaderboard, currentUserId }) => {
-            const { soloPoints, dualPoints, completedCount } = metrics;
-            const totalPoints = soloPoints + dualPoints;
-            const soloPercentage = totalPoints > 0 ? (soloPoints / totalPoints) * 100 : 0;
-            const dualPercentage = totalPoints > 0 ? (dualPoints / totalPoints) * 100 : 0;
+            const isCompleted = status === MISSION_STATUS.COMPLETED;
+            const isFailed = status === MISSION_STATUS.FAILED;
 
             return (
-                <div className="space-y-8">
-                    <h2 className="text-3xl font-bold text-indigo-700 flex items-center mb-4">
-                        <TrendingUp className="w-6 h-6 mr-2" /> Dynasty Performance Dashboard
-                    </h2>
-
-                    <div className="bg-white p-6 rounded-xl shadow-lg ring-4 ring-yellow-300/50">
-                        <div className="flex items-center justify-between">
-                            <p className="text-xl font-medium text-gray-500">Total Deevo Dynasty Points (DDP)</p>
-                            <Star className="w-8 h-8 text-yellow-500 fill-yellow-500" />
-                        </div>
-                        <p className="text-5xl font-extrabold text-indigo-800 mt-1">{totalScore}</p>
-                        <p className="text-sm text-gray-500 mt-2">Earned through {completedCount} completed missions.</p>
-                    </div>
-
-                    <div className="bg-white p-6 rounded-xl shadow-lg">
-                        <h3 className="text-xl font-semibold text-gray-700 mb-4 flex items-center">
-                            <Star className="w-5 h-5 mr-2 text-yellow-500 fill-yellow-500" /> Dynasty Leaderboard (Top 10)
-                        </h3>
-                        
-                        {leaderboard.length > 0 ? (
-                            <div className="space-y-2">
-                                {leaderboard.map((user, index) => (
-                                    <div key={user.userId} className={`flex justify-between items-center p-3 rounded-xl transition-all duration-200 ${user.userId === currentUserId ? 'bg-indigo-100 font-bold ring-2 ring-indigo-400' : 'bg-gray-50 hover:bg-gray-100'}`}>
-                                        <span className={`w-10 text-center font-extrabold text-lg ${index < 3 ? 'text-yellow-600' : 'text-gray-500'}`}>
-                                            #{index + 1}
-                                        </span>
-                                        <span className="flex-1 truncate mx-4 text-gray-700">
-                                            {user.userId === currentUserId ? 'YOU (Your ID)' : `User ID: ${user.userId}`}
-                                        </span>
-                                        <span className="text-xl text-indigo-700 font-bold">
-                                            {user.score} DDP
-                                        </span>
-                                    </div>
-                                ))}
-                            </div>
-                        ) : (
-                            <p className="text-gray-500 italic">No global scores found yet. Complete a mission to join the Leaderboard!</p>
-                        )}
-                    </div>
+                <div className={`p-4 border-b last:border-b-0 flex flex-col sm:flex-row justify-between items-start sm:items-center transition duration-200 
+                                ${isCompleted ? 'bg-green-50 border-green-200' : isFailed ? 'bg-red-50 border-red-200' : 'hover:bg-gray-50'}`}>
                     
-                    <div className="bg-white p-6 rounded-xl shadow-lg">
-                        <h3 className="text-xl font-semibold text-gray-700 mb-4 flex items-center">
-                            <BarChart className="w-5 h-5 mr-2 text-purple-500" /> Score Breakdown by Mission Type
+                    <div className="flex-1 min-w-0 mb-3 sm:mb-0">
+                        <h3 className={`text-lg font-semibold truncate ${isCompleted ? 'text-green-700' : isFailed ? 'text-red-700' : 'text-gray-800'}`}>
+                            {getIcon(status)} {mission.title}
                         </h3>
+                        <p className="text-sm text-gray-500 mt-1 pl-6">{mission.description}</p>
+                        <span className="inline-block mt-2 ml-6 text-xs font-medium px-2.5 py-0.5 rounded-full 
+                                        bg-indigo-100 text-indigo-800 uppercase">{mission.type} Mission</span>
+                    </div>
 
-                        {totalPoints > 0 ? (
-                            <>
-                                <div className="h-6 bg-gray-200 rounded-full flex overflow-hidden mb-6 shadow-inner">
-                                    <div 
-                                        style={{ width: `${soloPercentage}%` }} 
-                                        className="bg-blue-500 transition-all duration-700 ease-out"
-                                        title={`Solo: ${soloPercentage.toFixed(1)}%`}
-                                    ></div>
-                                    <div 
-                                        style={{ width: `${dualPercentage}%` }} 
-                                        className="bg-purple-500 transition-all duration-700 ease-out"
-                                        title={`Dual: ${dualPercentage.toFixed(1)}%`}
-                                    ></div>
-                                </div>
+                    <div className="flex space-x-2 text-sm font-medium">
+                        <span className={`px-3 py-1 rounded-lg ${isCompleted ? 'bg-green-600 text-white' : 'bg-gray-200 text-gray-800'}`}>
+                            {isCompleted ? 'Completed' : isFailed ? 'Failed' : 'Pending'}
+                        </span>
+                        <span className="px-3 py-1 rounded-lg bg-yellow-400 text-gray-900">
+                            {mission.points} Pts
+                        </span>
+                    </div>
 
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                    <div className="p-4 bg-blue-50 rounded-lg border border-blue-200 shadow-sm">
-                                        <p className="text-blue-600 font-bold text-xl">{soloPoints} DDP</p>
-                                        <p className="text-gray-600 text-sm">from **Solo Missions**</p>
-                                        <p className="text-xs text-gray-400 mt-1">{soloPercentage.toFixed(1)}% of total earned points</p>
-                                    </div>
-                                    <div className="p-4 bg-purple-50 rounded-lg border border-purple-200 shadow-sm">
-                                        <p className="text-purple-600 font-bold text-xl">{dualPoints} DDP</p>
-                                        <p className="text-gray-600 text-sm">from **Dual Missions**</p>
-                                        <p className="text-xs text-gray-400 mt-1">{dualPercentage.toFixed(1)}% of total earned points</p>
-                                    </div>
-                                </div>
-                            </>
-                        ) : (
-                            <p className="text-gray-500 italic">Complete your first mission to see your score breakdown!</p>
-                        )}
+                    <div className="flex space-x-2 mt-3 sm:mt-0 sm:ml-4">
+                        <button 
+                            onClick={() => handleUpdateStatus(MISSION_STATUS.COMPLETED)}
+                            disabled={isCompleted}
+                            className={`px-4 py-2 rounded-lg text-white font-medium transition duration-200 
+                                        ${isCompleted ? 'bg-gray-400 cursor-not-allowed' : 'bg-green-500 hover:bg-green-600 active:bg-green-700'} 
+                                        disabled:opacity-50`}
+                        >
+                            Done
+                        </button>
+                        <button 
+                            onClick={() => handleUpdateStatus(MISSION_STATUS.FAILED)}
+                            disabled={isCompleted || isFailed}
+                            className={`px-4 py-2 rounded-lg text-white font-medium transition duration-200 
+                                        ${isCompleted || isFailed ? 'bg-gray-400 cursor-not-allowed' : 'bg-red-500 hover:bg-red-600 active:bg-red-700'} 
+                                        disabled:opacity-50`}
+                        >
+                            Fail
+                        </button>
                     </div>
                 </div>
             );
         };
 
-
-        // --- Mission Item Component (Logic is preserved) ---
-
-        const MissionItem = ({ mission, userId, db, isPartnerAction = false, updateUserScore }) => {
-            const isDual = mission.type === 'Dual';
-            const isSolo = mission.type === 'Solo';
-            const isComplete = mission.completed;
-            const missionPoints = mission.points || 0;
-
-            const handleSoloComplete = async () => {
-                if (!isSolo || isComplete) return;
-                const missionRef = doc(db, `artifacts/${appId}/users/${userId}/missions`, mission.id);
-                try {
-                    await updateDoc(missionRef, { completed: true, completedAt: serverTimestamp() });
-                    updateUserScore(missionPoints);
-                } catch (error) { console.error("Error updating solo mission completion:", error); }
-            };
-
-            const handleInitiatorComplete = async () => {
-                if (!isDual || isComplete) return;
-                const missionRef = doc(db, `artifacts/${appId}/public/data/dualMissions`, mission.id);
-                const willBeComplete = mission.partnerConfirmed;
-                try {
-                    await updateDoc(missionRef, {
-                        initiatorConfirmed: true,
-                        completed: willBeComplete, 
-                        completedAt: willBeComplete ? serverTimestamp() : null,
-                    });
-                    if (willBeComplete) { updateUserScore(missionPoints); }
-                } catch (error) { console.error("Error updating initiator confirmation:", error); }
-            };
-
-            const handlePartnerConfirm = async () => {
-                if (!isDual || isComplete) return;
-                const missionRef = doc(db, `artifacts/${appId}/public/data/dualMissions`, mission.id);
-                const willBeComplete = mission.initiatorConfirmed;
-                try {
-                    await updateDoc(missionRef, {
-                        partnerConfirmed: true,
-                        completed: willBeComplete, 
-                        completedAt: willBeComplete ? serverTimestamp() : null,
-                    });
-                    if (willBeComplete) { updateUserScore(missionPoints); }
-                } catch (error) { console.error("Error updating partner confirmation:", error); }
-            };
-
-            let statusText = 'Pending';
-            let statusIcon = Clock;
-            let statusColor = 'text-gray-500';
-
-            if (isComplete) {
-                statusText = 'Completed';
-                statusIcon = CheckCircle;
-                statusColor = 'text-green-600';
-            } else if (isSolo) {
-                statusText = 'Ready to Complete';
-                statusColor = 'text-blue-500';
-                statusIcon = User;
-            } else if (isDual) {
-                if (isPartnerAction) {
-                    if (mission.initiatorConfirmed) {
-                        statusText = 'Ready for Your Confirmation';
-                        statusColor = 'text-yellow-600';
-                        statusIcon = ArrowRight;
-                    }
-                } else {
-                    if (mission.initiatorConfirmed && !mission.partnerConfirmed) {
-                        statusText = 'Waiting for Partner Confirmation';
-                        statusColor = 'text-orange-500';
-                        statusIcon = Users;
-                    } else if (!mission.initiatorConfirmed) {
-                         statusText = 'Needs Your Completion';
-                        statusColor = 'text-blue-500';
-                        statusIcon = User;
-                    }
-                }
+        const calculateTotalScore = (userMissions) => {
+            // FIX: If userMissions is empty or null, return 0 instead of crashing.
+            if (!userMissions || Object.keys(userMissions).length === 0) {
+                return 0; 
             }
 
-            const StatusIcon = statusIcon;
-
-            return (
-                <div className={`p-4 mb-3 rounded-xl shadow-md flex flex-col sm:flex-row items-start sm:items-center justify-between transition-all duration-300 ${isComplete ? 'bg-green-50 ring-2 ring-green-200' : 'bg-white hover:shadow-lg'}`}>
-                    <div className="flex-1 min-w-0 mb-2 sm:mb-0">
-                        <p className="font-semibold text-lg text-gray-800 truncate">{mission.title}</p>
-                        <div className="flex items-center text-sm mt-1 space-x-2 flex-wrap">
-                            <span className={`flex items-center font-medium ${statusColor}`}>
-                                <StatusIcon className="w-4 h-4 mr-1" />
-                                {statusText}
-                            </span>
-                            <span className="text-gray-400 hidden sm:inline">|</span>
-                            <span className={`font-medium ${isDual ? 'text-purple-600' : 'text-indigo-600'}`}>{isDual ? `Dual Mission (${missionPoints} DDP)` : `Solo Mission (${missionPoints} DDP)`}</span>
-                            {isDual && mission.partnerId && (
-                                <span className="text-gray-400 hidden sm:inline">({`Partner ID: ${mission.partnerId}`})</span>
-                            )}
-                        </div>
-                    </div>
-
-                    <div className="sm:ml-4 flex-shrink-0">
-                        {isPartnerAction && mission.initiatorConfirmed && !isComplete && (
-                            <button
-                                onClick={handlePartnerConfirm}
-                                className="bg-green-500 hover:bg-green-600 text-white font-bold py-2 px-4 rounded-lg shadow-lg transition-colors w-full sm:w-auto"
-                            >
-                                Confirm Mission
-                            </button>
-                        )}
-
-                        {!isPartnerAction && isDual && !mission.initiatorConfirmed && !isComplete && (
-                            <button
-                                onClick={handleInitiatorComplete}
-                                className="bg-indigo-500 hover:bg-indigo-600 text-white font-bold py-2 px-4 rounded-lg shadow-lg transition-colors w-full sm:w-auto"
-                            >
-                                Complete My Step
-                            </button>
-                        )}
-                        
-                        {!isPartnerAction && isSolo && !isComplete && (
-                            <button
-                                onClick={handleSoloComplete} 
-                                className="bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded-lg shadow-lg transition-colors w-full sm:w-auto"
-                            >
-                                Mark Solo Complete
-                            </button>
-                        )}
-                    </div>
-                </div>
-            );
+            return initialMissions.reduce((total, mission) => {
+                const userStatus = userMissions[mission.id]?.status;
+                if (userStatus === MISSION_STATUS.COMPLETED) {
+                    return total + mission.points;
+                }
+                return total;
+            }, 0);
         };
 
-        // --- Main Application Component (Logic is preserved) ---
-
         const App = () => {
-            const [db, setDb] = useState(null);
-            const [auth, setAuth] = useState(null);
+            const [dbInstance, setDbInstance] = useState(null);
             const [userId, setUserId] = useState(null);
+            const [userMissions, setUserMissions] = useState({});
             const [isLoading, setIsLoading] = useState(true);
-            const [activeTab, setActiveTab] = useState('dashboard'); 
-            const [myMissions, setMyMissions] = useState([]);
-            const [partnerConfirmations, setPartnerConfirmations] = useState([]);
-
-            const [partnerIdInput, setPartnerIdInput] = useState('');
-            const [simulatedPartnerId, setSimulatedPartnerId] = useState(null);
-            const partnerIdToUse = simulatedPartnerId || userId;
-
-            const handleSimulatePartner = (e) => {
-                e.preventDefault();
-                if (partnerIdInput && partnerIdInput !== userId) {
-                     setSimulatedPartnerId(partnerIdInput);
-                } else if (partnerIdInput === userId) {
-                     console.error("Cannot simulate your own ID as a partner. Please use a different ID.");
-                     setSimulatedPartnerId(null);
-                } else {
-                     setSimulatedPartnerId(null);
-                }
-                setPartnerIdInput('');
-            };
-
-            const handleHelpClick = () => {
-                window.open('https://dynastyandlegacy.blogspot.com/p/help.html', '_blank');
-            };
+            const [activeTab, setActiveTab] = useState('all');
 
             // 1. Firebase Initialization and Authentication
             useEffect(() => {
-                if (!firebaseConfig) {
-                    console.error("Firebase config is missing.");
-                    setIsLoading(false);
+                const initializeFirebase = async () => {
+                    try {
+                        // Authentication
+                        if (typeof __initial_auth_token !== 'undefined') {
+                            await signInWithCustomToken(auth, __initial_auth_token);
+                        } else {
+                            await signInAnonymously(auth);
+                        }
+                        
+                        // Auth State Listener
+                        const unsubscribe = onAuthStateChanged(auth, (user) => {
+                            if (user) {
+                                setUserId(user.uid);
+                                setDbInstance(db);
+                            } else {
+                                console.warn("User not authenticated after sign-in attempt.");
+                                setUserId(null);
+                                setDbInstance(null);
+                                setIsLoading(false);
+                            }
+                        });
+                        return () => unsubscribe();
+
+                    } catch (error) {
+                        console.error("Firebase Initialization or Auth Error:", error);
+                        setIsLoading(false);
+                    }
+                };
+
+                initializeFirebase();
+            }, []);
+
+            // 2. Data Subscription (onSnapshot)
+            useEffect(() => {
+                if (!dbInstance || !userId) {
+                    if (userId === null) setIsLoading(false); // If auth failed, stop loading
                     return;
                 }
 
-                setLogLevel('Debug');
-                const appInstance = initializeApp(firebaseConfig);
-                const authInstance = getAuth(appInstance);
-                const dbInstance = getFirestore(appInstance);
+                const userMissionsRef = collection(dbInstance, 'artifacts', appId, 'users', userId, 'missions');
 
-                setAuth(authInstance);
-                setDb(dbInstance);
-
-                const initAuth = async () => {
-                    try {
-                        if (initialAuthToken) {
-                            await signInWithCustomToken(authInstance, initialAuthToken);
-                        } else {
-                            await signInAnonymously(authInstance);
-                        }
-                    } catch (error) {
-                        console.error("Authentication Error:", error);
-                    }
-                };
-                initAuth();
-
-                const unsubscribeAuth = onAuthStateChanged(authInstance, (user) => {
-                    if (user) {
-                        setUserId(user.uid);
-                    } else {
-                        setUserId(crypto.randomUUID());
-                    }
+                // This query fetches ALL mission status documents for the current user
+                const unsubscribe = onSnapshot(userMissionsRef, (snapshot) => {
+                    const missionsData = {};
+                    snapshot.forEach((doc) => {
+                        missionsData[doc.id] = doc.data();
+                    });
+                    setUserMissions(missionsData);
+                    setIsLoading(false);
+                }, (error) => {
+                    console.error("Firestore Snapshot Error:", error);
                     setIsLoading(false);
                 });
 
-                return () => unsubscribeAuth();
-            }, []);
+                return () => unsubscribe();
+            }, [dbInstance, userId]);
 
-            const { score, updateUserScore } = useUserScore(db, userId);
-            const isReadyForGlobalFetch = !isLoading && db;
-            const metrics = useMissionMetrics(db, userId, myMissions);
-            const leaderboard = useLeaderboard(db, isReadyForGlobalFetch);
+            // Derived State
+            const filteredMissions = useMemo(() => {
+                if (activeTab === 'core') {
+                    return initialMissions.filter(m => m.type === 'core');
+                }
+                if (activeTab === 'side') {
+                    return initialMissions.filter(m => m.type === 'side');
+                }
+                return initialMissions;
+            }, [activeTab]);
 
-            // 2. Real-time Firestore Listeners
-            useEffect(() => {
-                if (!db || !userId) return;
-                console.log(`Setting up listeners for user: ${userId}`);
-
-                const publicDualMissionsRef = collection(db, `artifacts/${appId}/public/data/dualMissions`);
-                const privateMissionsRef = collection(db, `artifacts/${appId}/users/${userId}/missions`);
-                let dualMissions = [];
-
-                const qMyDual = query(publicDualMissionsRef, where("initiatorId", "==", userId));
-                const unsubscribeDual = onSnapshot(qMyDual, (snapshot) => {
-                    dualMissions = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data(), type: 'Dual', points: doc.data().points || 25 }));
-                    setMyMissions(prevMissions => [...prevMissions.filter(m => m.type === 'Solo'), ...dualMissions]);
-                }, (error) => { console.error("Error fetching my dual missions:", error); });
-                
-                const unsubscribeSolo = onSnapshot(query(privateMissionsRef), (snapshot) => {
-                    const soloMissions = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data(), type: 'Solo', points: doc.data().points || 10 }));
-                    setMyMissions(soloMissions.concat(dualMissions)); 
-                }, (error) => { console.error("Error fetching my solo missions:", error); });
-
-
-                const qPartnerConfirmations = query(
-                    publicDualMissionsRef, 
-                    where("partnerId", "==", userId), 
-                    where("partnerConfirmed", "==", false)
-                );
-                const unsubscribePartner = onSnapshot(qPartnerConfirmations, (snapshot) => {
-                    const confirmations = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data(), type: 'Dual', points: doc.data().points || 25 }))
-                                            .filter(mission => mission.initiatorConfirmed === true && mission.initiatorId !== userId); 
-                    setPartnerConfirmations(confirmations);
-                }, (error) => { console.error("Error fetching partner confirmations:", error); });
-
-                return () => {
-                    unsubscribeDual();
-                    unsubscribeSolo();
-                    unsubscribePartner();
-                };
-            }, [db, userId]);
-
-            // --- Add Mission Function (for testing) ---
-            const addTestMission = async (type) => {
-                if (!db || !userId) return;
-                const baseMissionData = {
-                    points: type === 'Solo' ? 10 : 25,
-                    type: type,
-                    completed: false,
-                    timestamp: serverTimestamp(),
-                };
-
-                try {
-                    if (type === 'Solo') {
-                        const soloData = { ...baseMissionData, title: `Solo Challenge: Inner Strength (${Date.now() % 1000})`, };
-                        await addDoc(collection(db, `artifacts/${appId}/users/${userId}/missions`), soloData);
-                    } else {
-                        const partnerIDForMission = partnerIdToUse || userId;
-                        if (partnerIDForMission === userId) { console.warn("Dual mission created with current user as both initiator and partner. Set a simulated partner ID for real dual testing."); }
-                        const dualData = {
-                            ...baseMissionData,
-                            title: `Dual Task: Legacy Building (${Date.now() % 1000})`,
-                            initiatorId: userId,
-                            partnerId: partnerIDForMission, 
-                            initiatorConfirmed: false,
-                            partnerConfirmed: false,
-                        };
-                        await addDoc(collection(db, `artifacts/${appId}/public/data/dualMissions`), dualData);
-                    }
-                } catch (error) { console.error(`Error adding ${type} mission:`, error); }
-            };
-
+            const totalScore = useMemo(() => calculateTotalScore(userMissions), [userMissions]);
 
             if (isLoading) {
                 return (
-                    <div className="flex justify-center items-center h-screen bg-gray-50">
-                        <RefreshCw className="w-8 h-8 text-indigo-500 animate-spin" />
-                        <p className="ml-3 text-indigo-700">Loading Family Tracker...</p>
+                    <div className="flex items-center justify-center min-h-screen bg-gray-50">
+                        <Loader2 className="w-8 h-8 animate-spin text-indigo-600" />
+                        <p className="ml-3 text-lg font-medium text-indigo-600">Initializing Deevo Core...</p>
+                    </div>
+                );
+            }
+            
+            // Fallback for unauthorized/failed auth state
+            if (!userId) {
+                return (
+                    <div className="flex flex-col items-center justify-center min-h-screen bg-red-50 p-4">
+                        <XCircle className="w-12 h-12 text-red-500 mb-4" />
+                        <h1 className="text-xl font-bold text-red-800 mb-2">Authentication Failed</h1>
+                        <p className="text-gray-600 text-center">Could not establish a secure connection. Please refresh the page.</p>
                     </div>
                 );
             }
 
-            const sortedMyMissions = [...myMissions].sort((a, b) => {
-                if (a.completed !== b.completed) {
-                    return a.completed ? 1 : -1;
-                }
-                const aTimestamp = a.timestamp?.toMillis() || 0;
-                const bTimestamp = b.timestamp?.toMillis() || 0;
-                return bTimestamp - aTimestamp;
-            });
+            const tabClasses = (tabName) => 
+                `px-4 py-2 font-medium border-b-2 transition duration-150 ease-in-out ${
+                    activeTab === tabName 
+                        ? 'border-indigo-500 text-indigo-600 bg-indigo-50' 
+                        : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                }`;
 
             return (
-                <div className="min-h-screen p-4 md:p-8 bg-gray-50 font-sans">
-                    <div className="max-w-4xl mx-auto">
-                        
-                        <header className="mb-8 pb-4 border-b border-indigo-200">
-                            <div className="flex justify-between items-start">
-                                 <h1 className="text-4xl font-extrabold text-indigo-800 mb-2">Deevo Dynasty Code Tracker</h1>
-                                 <button
-                                    onClick={handleHelpClick}
-                                    className="flex items-center bg-indigo-500 hover:bg-indigo-600 text-white text-sm font-medium py-2 px-3 rounded-lg shadow-md transition-colors whitespace-nowrap"
-                                >
-                                    <HelpCircle className="w-4 h-4 mr-1" />
-                                    Help & Support
-                                </button>
+                <div className="min-h-screen bg-gray-100 p-4 sm:p-8">
+                    
+                    {/* Header and Score Card */}
+                    <header className="mb-8">
+                        <div className="max-w-4xl mx-auto bg-white shadow-xl rounded-xl p-6 flex flex-col sm:flex-row justify-between items-center border-t-4 border-indigo-500">
+                            <div className="flex items-center mb-4 sm:mb-0">
+                                <Bell className="w-8 h-8 text-indigo-500 mr-3" />
+                                <h1 className="text-2xl font-extrabold text-gray-800">DEEVO DYNASTY CODE TRACKER:</h1>
                             </div>
-
-                            <div className="flex justify-start items-center space-x-4 mt-2">
-                                 <div className="flex items-center bg-yellow-100 text-yellow-800 p-2 px-4 rounded-full font-bold shadow-md">
-                                    <Star className="w-5 h-5 mr-2 fill-yellow-500 text-yellow-500" />
-                                    Total DDP: {score}
-                                </div>
-                                <p className="text-sm text-indigo-600 break-all">
-                                    User ID: <span className="font-mono bg-indigo-100 px-2 py-0.5 rounded-md text-xs sm:text-sm">{userId}</span>
-                                </p>
+                            
+                            <div className="flex items-center">
+                                <span className="text-4xl font-black text-indigo-600 tracking-wider">
+                                    {totalScore}
+                                </span>
+                                <span className="text-xl font-medium text-gray-600 ml-2">
+                                    Points
+                                </span>
                             </div>
-
-                            {simulatedPartnerId && (
-                                <p className="text-xs text-red-500 mt-1">
-                                    ⚠️ Mission Partner ID Set To: <span className="font-mono">{simulatedPartnerId}</span> (Empty input clears this)
-                                </p>
-                            )}
-                        </header>
-
-                        <div className="p-4 mb-8 bg-indigo-50 border border-indigo-200 rounded-xl shadow-inner">
-                            <h2 className="text-xl font-semibold text-indigo-700 mb-3">Mission Control (Testing)</h2>
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
-                                <button 
-                                    onClick={() => addTestMission('Solo')}
-                                    className="bg-blue-500 hover:bg-blue-600 text-white font-medium py-2 rounded-lg transition-colors shadow-md transform hover:scale-[1.02]"
-                                >
-                                    Add Solo Mission (10 DDP)
-                                </button>
-                                <button 
-                                    onClick={() => addTestMission('Dual')}
-                                    className="bg-purple-500 hover:bg-purple-600 text-white font-medium py-2 rounded-lg transition-colors shadow-md transform hover:scale-[1.02]"
-                                >
-                                    Add Dual Mission (25 DDP)
-                                </button>
-                            </div>
-
-                            <form onSubmit={handleSimulatePartner} className="flex flex-col sm:flex-row space-y-2 sm:space-y-0 sm:space-x-2 mt-4">
-                                <input 
-                                    type="text" 
-                                    value={partnerIdInput}
-                                    onChange={(e) => setPartnerIdInput(e.target.value)}
-                                    placeholder="Paste a full Partner's User ID here"
-                                    className="flex-1 p-2 border border-indigo-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
-                                />
-                                <button 
-                                    type="submit"
-                                    className="bg-indigo-500 hover:bg-indigo-600 text-white font-medium py-2 px-4 rounded-lg transition-colors shadow-md"
-                                >
-                                    Set/Clear Partner ID
-                                </button>
-                            </form>
                         </div>
+                    </header>
 
-
-                        <div className="flex border-b border-gray-200 mb-6">
-                            <button
-                                className={`py-3 px-3 sm:px-6 text-base sm:text-lg font-medium transition-colors ${activeTab === 'dashboard' ? 'border-b-4 border-indigo-600 text-indigo-700' : 'text-gray-500 hover:text-gray-700'}`}
-                                onClick={() => setActiveTab('dashboard')}
-                            >
-                                Dashboard
-                            </button>
-                            <button
-                                className={`py-3 px-3 sm:px-6 text-base sm:text-lg font-medium transition-colors ${activeTab === 'myMissions' ? 'border-b-4 border-indigo-600 text-indigo-700' : 'text-gray-500 hover:text-gray-700'}`}
-                                onClick={() => setActiveTab('myMissions')}
-                            >
-                                My Missions ({myMissions.length})
-                            </button>
-                            <button
-                                className={`py-3 px-3 sm:px-6 text-base sm:text-lg font-medium transition-colors ${activeTab === 'partnerConfirmations' ? 'border-b-4 border-indigo-600 text-indigo-700' : 'text-gray-500 hover:text-gray-700'}`}
-                                onClick={() => setActiveTab('partnerConfirmations')}
-                            >
-                                Confirmations ({partnerConfirmations.length})
-                            </button>
+                    {/* Tab Navigation */}
+                    <nav className="max-w-4xl mx-auto bg-white shadow-md rounded-t-lg border-b border-gray-200">
+                        <div className="flex justify-start">
+                            <button onClick={() => setActiveTab('all')} className={tabClasses('all')}>All Missions</button>
+                            <button onClick={() => setActiveTab('core')} className={tabClasses('core')}>Core</button>
+                            <button onClick={() => setActiveTab('side')} className={tabClasses('side')}>Side Quests</button>
                         </div>
+                    </nav>
 
-
-                        <div id="mission-list-content">
-                            {activeTab === 'dashboard' && <Dashboard 
-                                totalScore={score} 
-                                metrics={metrics} 
-                                leaderboard={leaderboard} 
-                                currentUserId={userId} 
-                            />}
-
-                            {activeTab === 'myMissions' && (
-                                <div className="space-y-4">
-                                    <h2 className="text-2xl font-bold text-gray-700 mb-4">My Initiated Missions (Solo & Dual)</h2>
-                                    {sortedMyMissions.length > 0 ? (
-                                        sortedMyMissions.map(mission => (
-                                            <MissionItem 
-                                                key={mission.id} 
-                                                mission={mission} 
-                                                userId={userId} 
-                                                db={db}
-                                                isPartnerAction={false}
-                                                updateUserScore={updateUserScore}
-                                            />
-                                        ))
-                                    ) : (
-                                        <p className="text-gray-400 italic p-4 bg-white rounded-xl shadow-md">No missions started by you. Use the Mission Control panel to add a new mission!</p>
-                                    )}
-                                </div>
-                            )}
-
-                            {activeTab === 'partnerConfirmations' && (
-                                <div className="space-y-4">
-                                    <h2 className="text-2xl font-bold text-gray-700 mb-4">Missions Requiring Your Confirmation</h2>
-                                    {partnerConfirmations.length > 0 ? (
-                                        partnerConfirmations.map(mission => (
-                                            <MissionItem 
-                                                key={mission.id} 
-                                                mission={mission} 
-                                                userId={userId} 
-                                                db={db}
-                                                isPartnerAction={true}
-                                                updateUserScore={updateUserScore}
-                                            />
-                                        ))
-                                    ) : (
-                                        <p className="text-gray-400 italic p-4 bg-white rounded-xl shadow-md">No missions currently require your confirmation.</p>
-                                    )}
-                                </div>
-                            )}
-                        </div>
-
-                    </div>
+                    {/* Mission List */}
+                    <main className="max-w-4xl mx-auto bg-white shadow-xl rounded-b-xl mb-12">
+                        {filteredMissions.map(mission => (
+                            <MissionItem
+                                key={mission.id}
+                                mission={mission}
+                                userMissions={userMissions}
+                                userId={userId}
+                                dbInstance={dbInstance}
+                            />
+                        ))}
+                    </main>
+                    
+                    {/* User ID Footer (for collaboration) */}
+                    <footer className="max-w-4xl mx-auto text-center text-xs text-gray-500 mt-4 p-4">
+                        <p>
+                            Securely signed in as User ID (for collaboration): <span className="font-mono bg-gray-200 p-1 rounded-md text-gray-700 select-all">{userId}</span>
+                        </p>
+                    </footer>
                 </div>
             );
         };
 
-        // Standard React DOM rendering
-        const root = ReactDOM.createRoot(document.getElementById('root'));
-        root.render(<App />);
+        ReactDOM.render(<App />, document.getElementById('root'));
     </script>
 </body>
 </html>
