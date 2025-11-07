@@ -18,10 +18,10 @@
     <!-- Babel is required to process the JSX/ES6 in the browser -->
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
-    <!-- Load Firebase CDNS -->
-    <script src="https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js"></script>
+    <!-- 💥 FIX: Switched to Firebase V8 CDNs to fix the "import" and "firebase is not defined" errors. 💥 -->
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-auth.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
     
     <!-- Load Lucide Icons CDN for visual appeal -->
     <script src="https://unpkg.com/lucide@latest"></script>
@@ -37,6 +37,7 @@
 
     <script type="text/babel">
         const { useState, useEffect, useCallback, useMemo } = React;
+        // The firebase object is now correctly available globally thanks to the V8 links.
         const { initializeApp } = firebase;
         const { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } = firebase.auth;
         const { getFirestore, doc, setDoc, onSnapshot, collection, query, where, updateDoc } = firebase.firestore;
@@ -44,15 +45,24 @@
 
         // Global variables initialized outside React scope
         const firebaseConfig = JSON.parse(__firebase_config);
-        // *** REPLACE 'pikaverse-alliance-96839' with YOUR Project ID ***
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'deevo-dynasty-app'; 
+        
+        // >>> IMPORTANT: REPLACE THE PROJECT ID HERE WITH YOUR ACTUAL FIREBASE PROJECT ID <<<
+        // If your project ID is 'deevo-tracker-777', this line should be: const PLACEHOLDER_PROJECT_ID = 'deevo-tracker-777';
+        const PLACEHOLDER_PROJECT_ID = 'pikaverse-alliance-96839'; 
+        const appId = typeof __app_id !== 'undefined' ? __app_id : PLACEHOLDER_PROJECT_ID; 
 
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
         const auth = getAuth(app);
         
         // Set Firebase Logging level
-        firebase.firestore.setLogLevel('debug');
+        // NOTE: This version of logging requires V9 syntax, but we'll use a try/catch in case it's unavailable.
+        try {
+            firebase.firestore.setLogLevel('debug');
+        } catch (e) {
+            console.log("Could not set Firestore log level (expected with V8).");
+        }
+
 
         const MISSION_POINTS = 100;
         const MISSION_STATUS = {
@@ -76,10 +86,11 @@
             const handleUpdateStatus = async (newStatus) => {
                 if (!userId || !dbInstance) return console.error("Database not ready.");
 
-                const missionRef = doc(dbInstance, 'artifacts', appId, 'users', userId, 'missions', mission.id);
+                // V8 syntax for doc path
+                const missionRef = dbInstance.collection('artifacts').doc(appId).collection('users').doc(userId).collection('missions').doc(mission.id);
 
                 try {
-                    await setDoc(missionRef, {
+                    await missionRef.set({
                         status: newStatus,
                         timestamp: new Date(),
                         points: newStatus === MISSION_STATUS.COMPLETED ? mission.points : 0
@@ -151,7 +162,6 @@
         };
 
         const calculateTotalScore = (userMissions) => {
-            // FIX: If userMissions is empty or null, return 0 instead of crashing.
             if (!userMissions || Object.keys(userMissions).length === 0) {
                 return 0; 
             }
@@ -177,10 +187,12 @@
                 const initializeFirebase = async () => {
                     try {
                         // Authentication
+                        const signIn = (token) => token ? signInWithCustomToken(auth, token) : signInAnonymously(auth);
+
                         if (typeof __initial_auth_token !== 'undefined') {
-                            await signInWithCustomToken(auth, __initial_auth_token);
+                            await signIn(__initial_auth_token);
                         } else {
-                            await signInAnonymously(auth);
+                            await signIn(null); // Sign in anonymously if no custom token
                         }
                         
                         // Auth State Listener
@@ -192,8 +204,8 @@
                                 console.warn("User not authenticated after sign-in attempt.");
                                 setUserId(null);
                                 setDbInstance(null);
-                                setIsLoading(false);
                             }
+                            setIsLoading(false);
                         });
                         return () => unsubscribe();
 
@@ -209,23 +221,20 @@
             // 2. Data Subscription (onSnapshot)
             useEffect(() => {
                 if (!dbInstance || !userId) {
-                    if (userId === null) setIsLoading(false); // If auth failed, stop loading
                     return;
                 }
 
-                const userMissionsRef = collection(dbInstance, 'artifacts', appId, 'users', userId, 'missions');
+                // V8 syntax for collection path and onSnapshot
+                const userMissionsCollection = dbInstance.collection('artifacts').doc(appId).collection('users').doc(userId).collection('missions');
 
-                // This query fetches ALL mission status documents for the current user
-                const unsubscribe = onSnapshot(userMissionsRef, (snapshot) => {
+                const unsubscribe = userMissionsCollection.onSnapshot((snapshot) => {
                     const missionsData = {};
                     snapshot.forEach((doc) => {
                         missionsData[doc.id] = doc.data();
                     });
                     setUserMissions(missionsData);
-                    setIsLoading(false);
                 }, (error) => {
                     console.error("Firestore Snapshot Error:", error);
-                    setIsLoading(false);
                 });
 
                 return () => unsubscribe();
@@ -329,4 +338,3 @@
     </script>
 </body>
 </html>
-
