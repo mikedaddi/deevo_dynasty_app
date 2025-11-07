@@ -7,9 +7,21 @@
 
     <!-- Load Tailwind CSS for styling -->
     <script src="https://cdn.tailwindcss.com"></script>
+
     <style>
         /* Set default font */
         body { font-family: 'Inter', sans-serif; }
+        /* Style the scrollbar */
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 8px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background-color: rgba(100, 116, 139, 0.5); /* Slate 500 */
+            border-radius: 4px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: rgba(241, 245, 249, 0.3); /* Slate 100 */
+        }
     </style>
 
     <!-- Load React, ReactDOM, and Babel -->
@@ -18,11 +30,11 @@
     <!-- Babel is required to process the JSX/ES6 in the browser -->
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
-    <!-- 💥 FIX: Switched to Firebase V8 CDNs to fix the "import" and "firebase is not defined" errors. 💥 -->
+    <!-- Load Firebase CDNS (V9+ syntax requires specific module imports, V8 style via CDN is more stable here) -->
     <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
     <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-auth.js"></script>
     <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
-    
+
     <!-- Load Lucide Icons CDN for visual appeal -->
     <script src="https://unpkg.com/lucide@latest"></script>
 
@@ -31,305 +43,636 @@
     <div id="root">
         <!-- React App mounts here -->
         <div class="flex justify-center items-center h-screen bg-gray-100">
-            <p class="text-lg text-gray-500">Loading application...</p>
+            <div class="text-xl text-gray-600">Loading application...</div>
         </div>
     </div>
 
     <script type="text/babel">
-        const { useState, useEffect, useCallback, useMemo } = React;
-        // The firebase object is now correctly available globally thanks to the V8 links.
-        const { initializeApp } = firebase;
-        const { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } = firebase.auth;
-        const { getFirestore, doc, setDoc, onSnapshot, collection, query, where, updateDoc } = firebase.firestore;
-        const { Bell, CheckSquare, XCircle, ChevronRight, Loader2 } = lucide;
-
         // Global variables initialized outside React scope
-        const firebaseConfig = JSON.parse(__firebase_config);
+        let db, auth;
+        const { useState, useEffect, useCallback, useRef } = React;
+
+        // --- Firebase Configuration and Initialization ---
+
+        // CORRECTED LINES 46-52:
+        // IMPORTANT: The Project ID MUST match the ID where the initial auth token was created.
+        const CORRECT_PROJECT_ID = 'deevo-dynasty-app'; 
+
+        // Get the Firebase config from the environment variables (or use a placeholder fallback)
+        const firebaseConfig = typeof __firebase_config !== 'undefined'
+            ? JSON.parse(__firebase_config)
+            : {
+                // NOTE: This fallback config is based on standard Firebase settings derived from the project ID.
+                apiKey: "AIzaSyCXXXXXXXXXXXXXXXXXXXXX", 
+                authDomain: CORRECT_PROJECT_ID + ".firebaseapp.com", 
+                projectId: CORRECT_PROJECT_ID, 
+                storageBucket: CORRECT_PROJECT_ID + ".appspot.com",
+                messagingSenderId: "1234567890",
+                appId: "1:1234567890:web:abcdef1234567890"
+            };
         
-        // >>> IMPORTANT: REPLACE THE PROJECT ID HERE WITH YOUR ACTUAL FIREBASE PROJECT ID <<<
-        // If your project ID is 'deevo-tracker-777', this line should be: const PLACEHOLDER_PROJECT_ID = 'deevo-tracker-777';
-        const PLACEHOLDER_PROJECT_ID = 'deevo-dynasty-app'; 
-        const appId = typeof __app_id !== 'undefined' ? __app_id : PLACEHOLDER_PROJECT_ID; 
+        // Use the environment's app ID if available, otherwise use the corrected project ID as a default
+        const appId = typeof __app_id !== 'undefined' ? __app_id : CORRECT_PROJECT_ID; 
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
 
-        const app = initializeApp(firebaseConfig);
-        const db = getFirestore(app);
-        const auth = getAuth(app);
-        
-        // Set Firebase Logging level
-        // NOTE: This version of logging requires V9 syntax, but we'll use a try/catch in case it's unavailable.
-        try {
-            firebase.firestore.setLogLevel('debug');
-        } catch (e) {
-            console.log("Could not set Firestore log level (expected with V8).");
-        }
+        // --- Utility Functions ---
 
-
-        const MISSION_POINTS = 100;
-        const MISSION_STATUS = {
-            PENDING: 'PENDING',
-            COMPLETED: 'COMPLETED',
-            FAILED: 'FAILED'
+        // Function to create Firebase path for Public or Private data
+        const getCollectionPath = (collectionName, isPublic, userId) => {
+            if (isPublic) {
+                // Public data path: /artifacts/{appId}/public/data/{collectionName}
+                return `artifacts/${appId}/public/data/${collectionName}`;
+            } else {
+                // Private data path: /artifacts/{appId}/users/{userId}/{collectionName}
+                if (!userId) {
+                    console.error("Cannot build private path: userId is undefined.");
+                    return null;
+                }
+                return `artifacts/${appId}/users/${userId}/${collectionName}`;
+            }
         };
 
-        const initialMissions = [
-            { id: 'mission1', title: 'Implement Signal Handling', description: 'Write code to manage two unique user signals.', type: 'core', points: MISSION_POINTS },
-            { id: 'mission2', title: 'Secure Data Transmission', description: 'Implement an encryption function for all outgoing data.', type: 'core', points: MISSION_POINTS },
-            { id: 'mission3', title: 'Optimize Loop Efficiency', description: 'Refactor a standard `for` loop into a high-performance array method.', type: 'core', points: MISSION_POINTS },
-            { id: 'mission4', title: 'Setup CI/CD Pipeline', description: 'Configure an automated build and deployment process.', type: 'side', points: MISSION_POINTS },
-            { id: 'mission5', title: 'Automated Testing Suite', description: 'Create and pass 10 unit tests for core functionalities.', type: 'side', points: MISSION_POINTS },
-            { id: 'mission6', title: 'Documentation Generation', description: 'Generate comprehensive documentation for all major functions.', type: 'side', points: MISSION_POINTS },
-        ];
+        // Icon component using Lucide (assumed available via CDN)
+        const Icon = ({ name, size = 24, className = "" }) => {
+            const lucide = window.lucide;
+            if (!lucide || !lucide[name]) return null;
+            const IconComponent = lucide[name];
+            return <IconComponent size={size} className={className} />;
+        };
 
-        const MissionItem = ({ mission, userMissions, userId, dbInstance }) => {
-            const status = userMissions[mission.id]?.status || MISSION_STATUS.PENDING;
+        // --- MissionItem Component ---
+        const MissionItem = ({ mission, onToggle, onDelete, onEdit, userId }) => {
+            const [isEditing, setIsEditing] = useState(false);
+            const [newTitle, setNewTitle] = useState(mission.title);
+            const [newPoints, setNewPoints] = useState(mission.points);
 
-            const handleUpdateStatus = async (newStatus) => {
-                if (!userId || !dbInstance) return console.error("Database not ready.");
+            // Determine if the current user is the owner (only owner can edit/delete)
+            const isOwner = mission.userId === userId;
 
-                // V8 syntax for doc path
-                const missionRef = dbInstance.collection('artifacts').doc(appId).collection('users').doc(userId).collection('missions').doc(mission.id);
-
-                try {
-                    await missionRef.set({
-                        status: newStatus,
-                        timestamp: new Date(),
-                        points: newStatus === MISSION_STATUS.COMPLETED ? mission.points : 0
-                    }, { merge: true });
-
-                } catch (error) {
-                    console.error("Error updating mission status:", error);
+            const handleSave = async () => {
+                if (newTitle.trim() === "" || isNaN(newPoints) || Number(newPoints) <= 0) {
+                    // In a real app, this would show a user-facing error modal, not just console log.
+                    console.error("Invalid mission data. Title cannot be empty, and points must be a positive number.");
+                    setIsEditing(false); // Close editing even on error for simplicity
+                    return;
                 }
+                await onEdit(mission.id, newTitle, Number(newPoints));
+                setIsEditing(false);
             };
 
-            const getIcon = (status) => {
-                switch (status) {
-                    case MISSION_STATUS.COMPLETED:
-                        return <CheckSquare className="w-5 h-5 text-green-500" />;
-                    case MISSION_STATUS.FAILED:
-                        return <XCircle className="w-5 h-5 text-red-500" />;
-                    default:
-                        return <ChevronRight className="w-5 h-5 text-gray-400" />;
+            const toggleEdit = () => {
+                // Reset state when entering edit mode
+                if (!isEditing) {
+                    setNewTitle(mission.title);
+                    setNewPoints(mission.points);
                 }
+                setIsEditing(!isEditing);
             };
 
-            const isCompleted = status === MISSION_STATUS.COMPLETED;
-            const isFailed = status === MISSION_STATUS.FAILED;
+            const pointsDisplay = mission.points === 0 ? "FREE" : `${mission.points}pts`;
 
             return (
-                <div className={`p-4 border-b last:border-b-0 flex flex-col sm:flex-row justify-between items-start sm:items-center transition duration-200 
-                                ${isCompleted ? 'bg-green-50 border-green-200' : isFailed ? 'bg-red-50 border-red-200' : 'hover:bg-gray-50'}`}>
-                    
-                    <div className="flex-1 min-w-0 mb-3 sm:mb-0">
-                        <h3 className={`text-lg font-semibold truncate ${isCompleted ? 'text-green-700' : isFailed ? 'text-red-700' : 'text-gray-800'}`}>
-                            {getIcon(status)} {mission.title}
-                        </h3>
-                        <p className="text-sm text-gray-500 mt-1 pl-6">{mission.description}</p>
-                        <span className="inline-block mt-2 ml-6 text-xs font-medium px-2.5 py-0.5 rounded-full 
-                                        bg-indigo-100 text-indigo-800 uppercase">{mission.type} Mission</span>
+                <div className={`
+                    flex items-center p-4 my-2 rounded-xl shadow-lg transition-all duration-300 ease-in-out
+                    ${mission.completed ? 'bg-green-100 border-l-8 border-green-600' : 'bg-white border-l-8 border-indigo-600 hover:shadow-xl'}
+                `}>
+                    <div className="flex-grow min-w-0">
+                        {isEditing ? (
+                            <div className="flex flex-col sm:flex-row space-y-2 sm:space-y-0 sm:space-x-3 items-start sm:items-center">
+                                <input
+                                    type="text"
+                                    value={newTitle}
+                                    onChange={(e) => setNewTitle(e.target.value)}
+                                    className="p-2 border border-gray-300 rounded-lg w-full sm:flex-1 font-medium text-gray-800"
+                                    placeholder="Mission Title"
+                                    aria-label="Edit mission title"
+                                />
+                                <input
+                                    type="number"
+                                    value={newPoints}
+                                    onChange={(e) => setNewPoints(e.target.value)}
+                                    className="p-2 border border-gray-300 rounded-lg w-20 text-center text-gray-800"
+                                    placeholder="Points"
+                                    aria-label="Edit mission points"
+                                />
+                                <button
+                                    onClick={handleSave}
+                                    className="p-2 bg-green-500 text-white rounded-lg shadow hover:bg-green-600 transition-colors whitespace-nowrap"
+                                >
+                                    <Icon name="Save" size={18} />
+                                </button>
+                            </div>
+                        ) : (
+                            <div className="flex items-center">
+                                <span className={`
+                                    text-lg font-semibold truncate transition-opacity duration-300
+                                    ${mission.completed ? 'line-through text-gray-500' : 'text-gray-800'}
+                                `}>
+                                    {mission.title}
+                                </span>
+                                <span className={`
+                                    ml-4 px-3 py-1 text-xs font-bold rounded-full transition-colors
+                                    ${mission.completed 
+                                        ? 'bg-green-500 text-white' 
+                                        : (mission.isPublic ? 'bg-indigo-500 text-white' : 'bg-gray-200 text-gray-700')
+                                    }
+                                `}>
+                                    {pointsDisplay}
+                                </span>
+                            </div>
+                        )}
+                        <p className="text-xs text-gray-500 mt-1">
+                            Owner: <span className="font-mono text-sm break-all">{mission.userId}</span>
+                        </p>
                     </div>
 
-                    <div className="flex space-x-2 text-sm font-medium">
-                        <span className={`px-3 py-1 rounded-lg ${isCompleted ? 'bg-green-600 text-white' : 'bg-gray-200 text-gray-800'}`}>
-                            {isCompleted ? 'Completed' : isFailed ? 'Failed' : 'Pending'}
-                        </span>
-                        <span className="px-3 py-1 rounded-lg bg-yellow-400 text-gray-900">
-                            {mission.points} Pts
-                        </span>
-                    </div>
+                    <div className="flex items-center space-x-2 ml-4 flex-shrink-0">
+                        {/* Toggle Button */}
+                        <button
+                            onClick={() => onToggle(mission.id, mission.completed)}
+                            className={`
+                                p-2 rounded-full shadow-md transition-transform transform hover:scale-105
+                                ${mission.completed ? 'bg-gray-300 text-gray-700' : 'bg-indigo-500 text-white hover:bg-indigo-600'}
+                            `}
+                            title={mission.completed ? "Mark as Incomplete" : "Mark as Complete"}
+                        >
+                            <Icon name={mission.completed ? "RefreshCw" : "CheckCircle"} size={20} />
+                        </button>
 
-                    <div className="flex space-x-2 mt-3 sm:mt-0 sm:ml-4">
-                        <button 
-                            onClick={() => handleUpdateStatus(MISSION_STATUS.COMPLETED)}
-                            disabled={isCompleted}
-                            className={`px-4 py-2 rounded-lg text-white font-medium transition duration-200 
-                                        ${isCompleted ? 'bg-gray-400 cursor-not-allowed' : 'bg-green-500 hover:bg-green-600 active:bg-green-700'} 
-                                        disabled:opacity-50`}
-                        >
-                            Done
-                        </button>
-                        <button 
-                            onClick={() => handleUpdateStatus(MISSION_STATUS.FAILED)}
-                            disabled={isCompleted || isFailed}
-                            className={`px-4 py-2 rounded-lg text-white font-medium transition duration-200 
-                                        ${isCompleted || isFailed ? 'bg-gray-400 cursor-not-allowed' : 'bg-red-500 hover:bg-red-600 active:bg-red-700'} 
-                                        disabled:opacity-50`}
-                        >
-                            Fail
-                        </button>
+                        {/* Edit and Delete Buttons (Only for Owner) */}
+                        {isOwner && (
+                            <>
+                                <button
+                                    onClick={toggleEdit}
+                                    className="p-2 bg-yellow-400 text-gray-800 rounded-full shadow-md hover:bg-yellow-500 transition-transform transform hover:scale-105"
+                                    title="Edit Mission"
+                                    disabled={isEditing}
+                                >
+                                    <Icon name="Edit" size={20} />
+                                </button>
+                                <button
+                                    onClick={() => onDelete(mission.id)}
+                                    className="p-2 bg-red-500 text-white rounded-full shadow-md hover:bg-red-600 transition-transform transform hover:scale-105"
+                                    title="Delete Mission"
+                                    disabled={isEditing}
+                                >
+                                    <Icon name="Trash2" size={20} />
+                                </button>
+                            </>
+                        )}
                     </div>
                 </div>
             );
         };
 
-        const calculateTotalScore = (userMissions) => {
-            if (!userMissions || Object.keys(userMissions).length === 0) {
-                return 0; 
-            }
+        // --- AddMissionForm Component ---
+        const AddMissionForm = ({ userId, onAdd, isPublic }) => {
+            const [title, setTitle] = useState('');
+            const [points, setPoints] = useState(100);
+            const [errorMessage, setErrorMessage] = useState('');
+            const inputRef = useRef(null);
 
-            return initialMissions.reduce((total, mission) => {
-                const userStatus = userMissions[mission.id]?.status;
-                if (userStatus === MISSION_STATUS.COMPLETED) {
-                    return total + mission.points;
+            const handleSubmit = (e) => {
+                e.preventDefault();
+                setErrorMessage('');
+
+                const pointsNum = Number(points);
+                if (title.trim() === '') {
+                    setErrorMessage('Mission title is required.');
+                    return;
                 }
-                return total;
-            }, 0);
-        };
-
-        const App = () => {
-            const [dbInstance, setDbInstance] = useState(null);
-            const [userId, setUserId] = useState(null);
-            const [userMissions, setUserMissions] = useState({});
-            const [isLoading, setIsLoading] = useState(true);
-            const [activeTab, setActiveTab] = useState('all');
-
-            // 1. Firebase Initialization and Authentication
-            useEffect(() => {
-                const initializeFirebase = async () => {
-                    try {
-                        // Authentication
-                        const signIn = (token) => token ? signInWithCustomToken(auth, token) : signInAnonymously(auth);
-
-                        if (typeof __initial_auth_token !== 'undefined') {
-                            await signIn(__initial_auth_token);
-                        } else {
-                            await signIn(null); // Sign in anonymously if no custom token
-                        }
-                        
-                        // Auth State Listener
-                        const unsubscribe = onAuthStateChanged(auth, (user) => {
-                            if (user) {
-                                setUserId(user.uid);
-                                setDbInstance(db);
-                            } else {
-                                console.warn("User not authenticated after sign-in attempt.");
-                                setUserId(null);
-                                setDbInstance(null);
-                            }
-                            setIsLoading(false);
-                        });
-                        return () => unsubscribe();
-
-                    } catch (error) {
-                        console.error("Firebase Initialization or Auth Error:", error);
-                        setIsLoading(false);
-                    }
-                };
-
-                initializeFirebase();
-            }, []);
-
-            // 2. Data Subscription (onSnapshot)
-            useEffect(() => {
-                if (!dbInstance || !userId) {
+                if (isNaN(pointsNum) || pointsNum < 0) {
+                    setErrorMessage('Points must be a non-negative number.');
                     return;
                 }
 
-                // V8 syntax for collection path and onSnapshot
-                const userMissionsCollection = dbInstance.collection('artifacts').doc(appId).collection('users').doc(userId).collection('missions');
+                const newMission = {
+                    title: title.trim(),
+                    points: pointsNum,
+                    completed: false,
+                    isPublic: isPublic,
+                    userId: userId,
+                    createdAt: firebase.firestore.FieldValue.serverTimestamp()
+                };
 
-                const unsubscribe = userMissionsCollection.onSnapshot((snapshot) => {
-                    const missionsData = {};
-                    snapshot.forEach((doc) => {
-                        missionsData[doc.id] = doc.data();
+                onAdd(newMission);
+                setTitle('');
+                setPoints(100);
+                inputRef.current.focus();
+            };
+
+            const isPublicText = isPublic ? "Public Missions" : "Private Missions";
+
+            return (
+                <form 
+                    onSubmit={handleSubmit} 
+                    className="p-6 bg-white rounded-2xl shadow-xl w-full max-w-lg mx-auto mb-6 transition-transform transform hover:scale-[1.01]"
+                >
+                    <h3 className="text-2xl font-extrabold text-indigo-700 mb-4 border-b pb-2">New {isPublicText}</h3>
+                    {errorMessage && (
+                        <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded relative mb-4" role="alert">
+                            <span className="block sm:inline">{errorMessage}</span>
+                        </div>
+                    )}
+                    
+                    <div className="flex flex-col space-y-4">
+                        <input
+                            ref={inputRef}
+                            type="text"
+                            value={title}
+                            onChange={(e) => setTitle(e.target.value)}
+                            placeholder="Enter new mission description..."
+                            className="p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all text-lg"
+                            aria-label="Mission description"
+                        />
+                        <div className="flex space-x-4 items-center">
+                            <label className="text-gray-600 font-medium whitespace-nowrap">Points:</label>
+                            <input
+                                type="number"
+                                value={points}
+                                onChange={(e) => setPoints(e.target.value)}
+                                min="0"
+                                className="p-3 border border-gray-300 rounded-lg w-24 text-center focus:ring-2 focus:ring-indigo-500"
+                                aria-label="Mission points value"
+                            />
+                            <button
+                                type="submit"
+                                className="flex-grow p-3 bg-indigo-600 text-white rounded-xl shadow-lg hover:bg-indigo-700 transition-all duration-200 flex items-center justify-center font-bold text-lg"
+                            >
+                                <Icon name="PlusCircle" size={20} className="mr-2" />
+                                Add Mission
+                            </button>
+                        </div>
+                    </div>
+                </form>
+            );
+        };
+
+        // --- Main App Component ---
+        const App = () => {
+            const [isLoading, setIsLoading] = useState(true);
+            const [userId, setUserId] = useState(null);
+            const [privateMissions, setPrivateMissions] = useState([]);
+            const [publicMissions, setPublicMissions] = useState([]);
+            const [error, setError] = useState(null);
+            
+            // Check if Firebase instances are available
+            const isFirebaseReady = typeof firebase !== 'undefined' && typeof firebase.firestore !== 'undefined' && typeof firebase.auth !== 'undefined';
+
+            const missionsRef = useCallback((isPublic) => {
+                if (!db || !userId) return null;
+                const path = getCollectionPath('missions', isPublic, userId);
+                if (!path) return null;
+                return db.collection(path);
+            }, [userId]);
+
+            // Total Score calculation
+            const totalScore = React.useMemo(() => {
+                const completedPrivate = privateMissions
+                    .filter(m => m.completed)
+                    .reduce((sum, m) => sum + m.points, 0);
+
+                const completedPublic = publicMissions
+                    .filter(m => m.completed && m.userId === userId) // Only count public missions completed by *this* user
+                    .reduce((sum, m) => sum + m.points, 0);
+
+                return completedPrivate + completedPublic;
+            }, [privateMissions, publicMissions, userId]);
+
+            // --- Authentication & Initialization Effect ---
+            useEffect(() => {
+                if (!isFirebaseReady) {
+                    console.error("Firebase is not initialized or CDNs failed to load.");
+                    setError("System Error: Firebase services failed to load.");
+                    return;
+                }
+
+                try {
+                    // Initialize Firebase App and Services
+                    const app = firebase.initializeApp(firebaseConfig);
+                    db = app.firestore();
+                    auth = app.auth();
+
+                    // Optional: Enable offline persistence (useful for mobile)
+                    // db.enablePersistence().catch(err => {
+                    //     if (err.code === 'failed-precondition') {
+                    //         console.log("Persistence failed: multiple tabs open.");
+                    //     } else if (err.code === 'unimplemented') {
+                    //         console.log("Persistence not available on this browser.");
+                    //     }
+                    // });
+
+                    // Set up Auth Listener
+                    const unsubscribeAuth = auth.onAuthStateChanged(async (user) => {
+                        if (user) {
+                            // User is signed in
+                            setUserId(user.uid);
+                            // Set loading to false only after successful sign-in
+                            setIsLoading(false);
+                            console.log("User signed in with ID:", user.uid);
+                        } else if (initialAuthToken) {
+                            // Attempt custom token sign-in
+                            try {
+                                await auth.signInWithCustomToken(initialAuthToken);
+                            } catch (e) {
+                                console.error("Error signing in with custom token:", e.message);
+                                // Fallback: Sign in anonymously if custom token fails
+                                try {
+                                    const anonymousUser = await auth.signInAnonymously();
+                                    setUserId(anonymousUser.user.uid);
+                                    setIsLoading(false);
+                                } catch (anonError) {
+                                    console.error("Error signing in anonymously:", anonError.message);
+                                    setError("Authentication Failed. Check console for details.");
+                                    setIsLoading(false); // Stop loading even if it failed
+                                }
+                            }
+                        } else {
+                            // Fallback: Sign in anonymously if no token is provided
+                            try {
+                                const anonymousUser = await auth.signInAnonymously();
+                                setUserId(anonymousUser.user.uid);
+                                setIsLoading(false);
+                            } catch (e) {
+                                console.error("Error signing in anonymously:", e.message);
+                                setError("Authentication Failed. Check console for details.");
+                                setIsLoading(false); // Stop loading even if it failed
+                            }
+                        }
                     });
-                    setUserMissions(missionsData);
-                }, (error) => {
-                    console.error("Firestore Snapshot Error:", error);
-                });
+
+                    return () => unsubscribeAuth();
+                } catch (e) {
+                    console.error("Initialization Error:", e);
+                    setError("Fatal Init Error: " + e.message);
+                    setIsLoading(false);
+                }
+            }, [isFirebaseReady]); // Only runs once on mount
+
+            // --- Firestore Data Fetching Effects (Private & Public) ---
+
+            // Private Missions Listener
+            useEffect(() => {
+                if (!db || !userId) return; // Wait until authenticated
+                
+                const privateRef = missionsRef(false);
+                if (!privateRef) return;
+
+                console.log("Attaching listener to Private Missions for user:", userId);
+
+                const unsubscribe = privateRef
+                    .orderBy('createdAt', 'desc')
+                    .onSnapshot(snapshot => {
+                        const missionsData = snapshot.docs.map(doc => ({
+                            id: doc.id,
+                            ...doc.data()
+                        }));
+                        setPrivateMissions(missionsData);
+                    }, err => {
+                        console.error("Private Missions Fetch Error:", err);
+                        // Permission denied is a common rule error.
+                        setError("Error fetching private data. Check Firestore rules.");
+                    });
 
                 return () => unsubscribe();
-            }, [dbInstance, userId]);
+            }, [userId, missionsRef]);
 
-            // Derived State
-            const filteredMissions = useMemo(() => {
-                if (activeTab === 'core') {
-                    return initialMissions.filter(m => m.type === 'core');
-                }
-                if (activeTab === 'side') {
-                    return initialMissions.filter(m => m.type === 'side');
-                }
-                return initialMissions;
-            }, [activeTab]);
+            // Public Missions Listener
+            useEffect(() => {
+                if (!db || !userId) return; // Wait until authenticated
 
-            const totalScore = useMemo(() => calculateTotalScore(userMissions), [userMissions]);
+                const publicRef = missionsRef(true);
+                if (!publicRef) return;
+
+                console.log("Attaching listener to Public Missions (All Users)");
+
+                // Note: No 'where' clause here to fetch ALL public missions
+                const unsubscribe = publicRef
+                    .orderBy('createdAt', 'desc')
+                    .onSnapshot(snapshot => {
+                        const missionsData = snapshot.docs.map(doc => ({
+                            id: doc.id,
+                            ...doc.data()
+                        }));
+                        setPublicMissions(missionsData);
+                    }, err => {
+                        console.error("Public Missions Fetch Error:", err);
+                        setError("Error fetching public data. Check Firestore rules.");
+                    });
+
+                return () => unsubscribe();
+            }, [userId, missionsRef]);
+
+
+            // --- CRUD Operations ---
+
+            const addMission = async (newMission) => {
+                try {
+                    if (!userId) {
+                        console.error("Cannot add mission: User not authenticated.");
+                        return;
+                    }
+                    const ref = missionsRef(newMission.isPublic);
+                    if (ref) {
+                        await ref.add(newMission);
+                    }
+                } catch (e) {
+                    console.error("Error adding document: ", e);
+                    setError("Could not add mission. Check console.");
+                }
+            };
+
+            const toggleMission = async (id, isCompleted, isPublic) => {
+                try {
+                    if (!userId) return;
+                    const ref = missionsRef(isPublic);
+                    if (ref) {
+                        await ref.doc(id).update({
+                            completed: !isCompleted,
+                            completedAt: !isCompleted ? firebase.firestore.FieldValue.serverTimestamp() : null
+                        });
+                    }
+                } catch (e) {
+                    console.error("Error toggling document: ", e);
+                    setError("Could not update mission status. Check console.");
+                }
+            };
+            
+            const editMission = async (id, title, points, isPublic) => {
+                 try {
+                    if (!userId) return;
+                    const ref = missionsRef(isPublic);
+                    if (ref) {
+                        await ref.doc(id).update({
+                            title: title,
+                            points: points,
+                            updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+                        });
+                    }
+                } catch (e) {
+                    console.error("Error editing document: ", e);
+                    setError("Could not edit mission. Check console.");
+                }
+            };
+
+            const deleteMission = async (id, isPublic) => {
+                try {
+                    if (!userId) return;
+                    const ref = missionsRef(isPublic);
+                    if (ref) {
+                        await ref.doc(id).delete();
+                    }
+                } catch (e) {
+                    console.error("Error deleting document: ", e);
+                    setError("Could not delete mission. Check console.");
+                }
+            };
+
+            // Unified handlers for MissionItem
+            const handleToggle = (id, isCompleted) => {
+                const targetPrivate = privateMissions.find(m => m.id === id);
+                const targetPublic = publicMissions.find(m => m.id === id);
+                
+                if (targetPrivate) {
+                    toggleMission(id, isCompleted, false);
+                } else if (targetPublic) {
+                    toggleMission(id, isCompleted, true);
+                } else {
+                    console.error("Mission not found for toggle:", id);
+                }
+            };
+
+            const handleDelete = (id) => {
+                const targetPrivate = privateMissions.find(m => m.id === id);
+                const targetPublic = publicMissions.find(m => m.id === id);
+
+                if (targetPrivate && targetPrivate.userId === userId) {
+                    // Private mission owned by user
+                    deleteMission(id, false);
+                } else if (targetPublic && targetPublic.userId === userId) {
+                    // Public mission owned by user
+                    deleteMission(id, true);
+                } else {
+                    // In a real app, this would be a user-facing modal
+                    console.error("Cannot delete: Mission not found or not owned by user:", id);
+                }
+            };
+            
+            const handleEdit = (id, newTitle, newPoints) => {
+                 const targetPrivate = privateMissions.find(m => m.id === id);
+                 const targetPublic = publicMissions.find(m => m.id === id);
+                 
+                if (targetPrivate && targetPrivate.userId === userId) {
+                    editMission(id, newTitle, newPoints, false);
+                } else if (targetPublic && targetPublic.userId === userId) {
+                    editMission(id, newTitle, newPoints, true);
+                } else {
+                    console.error("Cannot edit: Mission not found or not owned by user:", id);
+                }
+            };
+
+            // --- Rendering ---
 
             if (isLoading) {
                 return (
-                    <div className="flex items-center justify-center min-h-screen bg-gray-50">
-                        <Loader2 className="w-8 h-8 animate-spin text-indigo-600" />
-                        <p className="ml-3 text-lg font-medium text-indigo-600">Initializing Deevo Core...</p>
+                    <div className="flex justify-center items-center h-screen bg-gray-50">
+                        <div className="flex flex-col items-center">
+                            <div className="animate-spin rounded-full h-16 w-16 border-t-4 border-b-4 border-indigo-500"></div>
+                            <p className="mt-4 text-xl font-semibold text-indigo-700">Connecting to Dynasty Database...</p>
+                            <p className="text-sm text-gray-500">Checking authentication token...</p>
+                        </div>
                     </div>
                 );
             }
             
-            // Fallback for unauthorized/failed auth state
-            if (!userId) {
+            if (error) {
                 return (
-                    <div className="flex flex-col items-center justify-center min-h-screen bg-red-50 p-4">
-                        <XCircle className="w-12 h-12 text-red-500 mb-4" />
-                        <h1 className="text-xl font-bold text-red-800 mb-2">Authentication Failed</h1>
-                        <p className="text-gray-600 text-center">Could not establish a secure connection. Please refresh the page.</p>
+                    <div className="flex justify-center items-center h-screen bg-red-100">
+                        <div className="text-center p-8 bg-white rounded-xl shadow-2xl border-t-4 border-red-500">
+                            <h2 className="text-2xl font-bold text-red-600 mb-4">Application Error</h2>
+                            <p className="text-gray-700">{error}</p>
+                            <p className="mt-4 text-sm text-gray-500">Please check the console for detailed error messages.</p>
+                        </div>
                     </div>
                 );
             }
 
-            const tabClasses = (tabName) => 
-                `px-4 py-2 font-medium border-b-2 transition duration-150 ease-in-out ${
-                    activeTab === tabName 
-                        ? 'border-indigo-500 text-indigo-600 bg-indigo-50' 
-                        : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                }`;
-
             return (
                 <div className="min-h-screen bg-gray-100 p-4 sm:p-8">
-                    
-                    {/* Header and Score Card */}
-                    <header className="mb-8">
-                        <div className="max-w-4xl mx-auto bg-white shadow-xl rounded-xl p-6 flex flex-col sm:flex-row justify-between items-center border-t-4 border-indigo-500">
-                            <div className="flex items-center mb-4 sm:mb-0">
-                                <Bell className="w-8 h-8 text-indigo-500 mr-3" />
-                                <h1 className="text-2xl font-extrabold text-gray-800">DEEVO DYNASTY CODE TRACKER:</h1>
+                    {/* Header */}
+                    <header className="bg-white rounded-3xl shadow-2xl p-6 mb-8 sticky top-0 z-10 transition-all duration-300">
+                        <div className="flex flex-col md:flex-row justify-between items-center">
+                            <div className="flex items-center space-x-3 mb-4 md:mb-0">
+                                <Icon name="BarChart3" size={32} className="text-indigo-600" />
+                                <h1 className="text-3xl font-extrabold text-gray-800">
+                                    Deevo Dynasty Tracker
+                                </h1>
                             </div>
-                            
-                            <div className="flex items-center">
-                                <span className="text-4xl font-black text-indigo-600 tracking-wider">
-                                    {totalScore}
-                                </span>
-                                <span className="text-xl font-medium text-gray-600 ml-2">
-                                    Points
-                                </span>
+                            <div className="text-center md:text-right">
+                                <p className="text-sm font-medium text-gray-600">
+                                    Your ID: <span className="font-mono text-base break-all text-indigo-600">{userId}</span>
+                                </p>
+                                <div className="text-3xl font-bold text-green-600 bg-green-100 px-4 py-2 rounded-xl mt-2 shadow-inner">
+                                    SCORE: {totalScore} pts
+                                </div>
                             </div>
                         </div>
                     </header>
-
-                    {/* Tab Navigation */}
-                    <nav className="max-w-4xl mx-auto bg-white shadow-md rounded-t-lg border-b border-gray-200">
-                        <div className="flex justify-start">
-                            <button onClick={() => setActiveTab('all')} className={tabClasses('all')}>All Missions</button>
-                            <button onClick={() => setActiveTab('core')} className={tabClasses('core')}>Core</button>
-                            <button onClick={() => setActiveTab('side')} className={tabClasses('side')}>Side Quests</button>
-                        </div>
-                    </nav>
-
-                    {/* Mission List */}
-                    <main className="max-w-4xl mx-auto bg-white shadow-xl rounded-b-xl mb-12">
-                        {filteredMissions.map(mission => (
-                            <MissionItem
-                                key={mission.id}
-                                mission={mission}
-                                userMissions={userMissions}
-                                userId={userId}
-                                dbInstance={dbInstance}
-                            />
-                        ))}
-                    </main>
                     
-                    {/* User ID Footer (for collaboration) */}
-                    <footer className="max-w-4xl mx-auto text-center text-xs text-gray-500 mt-4 p-4">
-                        <p>
-                            Securely signed in as User ID (for collaboration): <span className="font-mono bg-gray-200 p-1 rounded-md text-gray-700 select-all">{userId}</span>
-                        </p>
-                    </footer>
+                    {/* Main Content Area */}
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                        
+                        {/* Private Missions Column (Left) */}
+                        <div className="space-y-6">
+                            <AddMissionForm userId={userId} onAdd={addMission} isPublic={false} />
+
+                            <h2 className="text-3xl font-extrabold text-gray-800 mb-4 border-b pb-2">Your Private Missions</h2>
+                            <div className="custom-scrollbar max-h-[70vh] overflow-y-auto pr-2">
+                                {privateMissions.length === 0 ? (
+                                    <div className="p-6 text-center bg-white rounded-xl shadow-inner text-gray-500">
+                                        No private missions yet. Start your quest!
+                                    </div>
+                                ) : (
+                                    privateMissions.map(mission => (
+                                        <MissionItem
+                                            key={mission.id}
+                                            mission={mission}
+                                            onToggle={handleToggle}
+                                            onDelete={handleDelete}
+                                            onEdit={handleEdit}
+                                            userId={userId}
+                                        />
+                                    ))
+                                )}
+                            </div>
+                        </div>
+
+                        {/* Public Missions Column (Right) */}
+                        <div className="space-y-6">
+                            <AddMissionForm userId={userId} onAdd={addMission} isPublic={true} />
+                            
+                            <h2 className="text-3xl font-extrabold text-gray-800 mb-4 border-b pb-2">Public Dynasty Missions</h2>
+                            <div className="custom-scrollbar max-h-[70vh] overflow-y-auto pr-2">
+                                {publicMissions.length === 0 ? (
+                                    <div className="p-6 text-center bg-white rounded-xl shadow-inner text-gray-500">
+                                        No public missions posted. Be the first!
+                                    </div>
+                                ) : (
+                                    publicMissions.map(mission => (
+                                        <MissionItem
+                                            key={mission.id}
+                                            mission={mission}
+                                            onToggle={handleToggle}
+                                            onDelete={handleDelete}
+                                            onEdit={handleEdit}
+                                            userId={userId}
+                                        />
+                                    ))
+                                )}
+                            </div>
+                        </div>
+
+                    </div>
                 </div>
             );
         };
@@ -338,4 +681,3 @@
     </script>
 </body>
 </html>
-
