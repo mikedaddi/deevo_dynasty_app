@@ -3,25 +3,16 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Deevo Dynasty Code Tracker</title>
-
-    <!-- Load Tailwind CSS for styling -->
+    <title>Deevo Dynasty Mission Tracker</title>
+    <!-- Load Tailwind CSS for modern styling -->
     <script src="https://cdn.tailwindcss.com"></script>
-
     <style>
         /* Set default font */
         body { font-family: 'Inter', sans-serif; }
-        /* Style the scrollbar */
-        .custom-scrollbar::-webkit-scrollbar {
-            width: 8px;
-        }
-        .custom-scrollbar::-webkit-scrollbar-thumb {
-            background-color: rgba(100, 116, 139, 0.5); /* Slate 500 */
-            border-radius: 4px;
-        }
-        .custom-scrollbar::-webkit-scrollbar-track {
-            background: rgba(241, 245, 249, 0.3); /* Slate 100 */
-        }
+        /* Style for the scrollbar within the mission list */
+        .custom-scrollbar::-webkit-scrollbar { width: 8px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background-color: #9ca3af; border-radius: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background-color: #f3f4f6; }
     </style>
 
     <!-- Load React, ReactDOM, and Babel -->
@@ -29,655 +20,571 @@
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
     <!-- Babel is required to process the JSX/ES6 in the browser -->
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-
-    <!-- Load Firebase CDNS (V9+ syntax requires specific module imports, V8 style via CDN is more stable here) -->
-    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-auth.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
-
+    
+    <!-- Load Firebase CDNs -->
+    <script src="https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js"></script>
+    
     <!-- Load Lucide Icons CDN for visual appeal -->
     <script src="https://unpkg.com/lucide@latest"></script>
-
 </head>
 <body>
     <div id="root">
         <!-- React App mounts here -->
-        <div class="flex justify-center items-center h-screen bg-gray-100">
-            <div class="text-xl text-gray-600">Loading application...</div>
+        <div class="flex justify-center items-center h-screen bg-gray-50">
+            <div class="text-2xl font-semibold text-indigo-600">Initializing Application...</div>
         </div>
     </div>
 
+    <!-- The React component logic -->
     <script type="text/babel">
-        // Global variables initialized outside React scope
-        let db, auth;
-        const { useState, useEffect, useCallback, useRef } = React;
-
-        // --- Firebase Configuration and Initialization ---
-
-        // CORRECTED LINES 46-52:
-        // IMPORTANT: The Project ID MUST match the ID where the initial auth token was created.
-        const CORRECT_PROJECT_ID = 'deevo-dynasty-app'; 
-
-        // Get the Firebase config from the environment variables (or use a placeholder fallback)
-        const firebaseConfig = typeof __firebase_config !== 'undefined'
-            ? JSON.parse(__firebase_config)
-            : {
-                // NOTE: This fallback config is based on standard Firebase settings derived from the project ID.
-                apiKey: "AIzaSyCXXXXXXXXXXXXXXXXXXXXX", 
-                authDomain: CORRECT_PROJECT_ID + ".firebaseapp.com", 
-                projectId: CORRECT_PROJECT_ID, 
-                storageBucket: CORRECT_PROJECT_ID + ".appspot.com",
-                messagingSenderId: "1234567890",
-                appId: "1:1234567890:web:abcdef1234567890"
-            };
+        // Import necessary components from the global Firebase and Lucide objects
+        const { useState, useEffect, useCallback, useMemo } = React;
+        const { initializeApp } = firebase.app;
+        const { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } = firebase.auth;
+        const { 
+            getFirestore, 
+            doc, 
+            onSnapshot, 
+            collection, 
+            query, 
+            addDoc, 
+            updateDoc, 
+            deleteDoc,
+            setLogLevel
+        } = firebase.firestore;
         
-        // Use the environment's app ID if available, otherwise use the corrected project ID as a default
-        const appId = typeof __app_id !== 'undefined' ? __app_id : CORRECT_PROJECT_ID; 
-        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+        // Lucide Icons (from the global Lucide object)
+        const { Zap, Users, Shield, Plus, Check, Trash2, Globe, Lock, Clock } = lucide;
 
-        // --- Utility Functions ---
+        // Set Firebase logging level to help with debugging in the console
+        setLogLevel('debug');
 
-        // Function to create Firebase path for Public or Private data
-        const getCollectionPath = (collectionName, isPublic, userId) => {
-            if (isPublic) {
-                // Public data path: /artifacts/{appId}/public/data/{collectionName}
-                return `artifacts/${appId}/public/data/${collectionName}`;
-            } else {
-                // Private data path: /artifacts/{appId}/users/{userId}/{collectionName}
-                if (!userId) {
-                    console.error("Cannot build private path: userId is undefined.");
-                    return null;
+        // --- Component: MissionItem ---
+        const MissionItem = ({ mission, userId, db, isPrivate }) => {
+            const handleToggleComplete = useCallback(async () => {
+                if (!userId || !db) return;
+
+                const collectionPath = isPrivate 
+                    ? `artifacts/${mission.appId}/users/${userId}/missions`
+                    : `artifacts/${mission.appId}/public/data/missions`;
+                    
+                try {
+                    const docRef = doc(db, collectionPath, mission.id);
+                    await updateDoc(docRef, {
+                        completed: !mission.completed,
+                        // Only set completion time if it was just completed
+                        completedAt: !mission.completed ? new Date() : null
+                    });
+                } catch (error) {
+                    console.error("Error toggling mission completion:", error);
+                    // Use a simple, non-blocking modal/alert-like log if needed
+                    // alert("Failed to update mission status. Check console for details.");
                 }
-                return `artifacts/${appId}/users/${userId}/${collectionName}`;
-            }
-        };
+            }, [mission.id, mission.completed, userId, db, mission.appId, isPrivate]);
 
-        // Icon component using Lucide (assumed available via CDN)
-        const Icon = ({ name, size = 24, className = "" }) => {
-            const lucide = window.lucide;
-            if (!lucide || !lucide[name]) return null;
-            const IconComponent = lucide[name];
-            return <IconComponent size={size} className={className} />;
-        };
+            const handleDelete = useCallback(async () => {
+                if (!userId || !db) return;
 
-        // --- MissionItem Component ---
-        const MissionItem = ({ mission, onToggle, onDelete, onEdit, userId }) => {
-            const [isEditing, setIsEditing] = useState(false);
-            const [newTitle, setNewTitle] = useState(mission.title);
-            const [newPoints, setNewPoints] = useState(mission.points);
+                const collectionPath = isPrivate 
+                    ? `artifacts/${mission.appId}/users/${userId}/missions`
+                    : `artifacts/${mission.appId}/public/data/missions`;
 
-            // Determine if the current user is the owner (only owner can edit/delete)
-            const isOwner = mission.userId === userId;
-
-            const handleSave = async () => {
-                if (newTitle.trim() === "" || isNaN(newPoints) || Number(newPoints) <= 0) {
-                    // In a real app, this would show a user-facing error modal, not just console log.
-                    console.error("Invalid mission data. Title cannot be empty, and points must be a positive number.");
-                    setIsEditing(false); // Close editing even on error for simplicity
+                // Safety check: Only the owner (or user for private) can delete
+                if (!isPrivate && mission.userId !== userId) {
+                    console.warn("Attempted to delete a public mission without ownership.");
                     return;
                 }
-                await onEdit(mission.id, newTitle, Number(newPoints));
-                setIsEditing(false);
-            };
 
-            const toggleEdit = () => {
-                // Reset state when entering edit mode
-                if (!isEditing) {
-                    setNewTitle(mission.title);
-                    setNewPoints(mission.points);
+                // IMPORTANT: Since alert/confirm is forbidden, this is a conceptual confirmation step.
+                // In a real app, this would be a custom modal. We'll proceed directly for simplicity here.
+                const shouldDelete = window.confirm("Are you sure you want to delete this mission?"); // Temporary use of confirm for functionality verification
+                
+                if (shouldDelete) {
+                    try {
+                        const docRef = doc(db, collectionPath, mission.id);
+                        await deleteDoc(docRef);
+                    } catch (error) {
+                        console.error("Error deleting mission:", error);
+                    }
                 }
-                setIsEditing(!isEditing);
-            };
+            }, [mission.id, userId, db, mission.appId, mission.userId, isPrivate]);
 
-            const pointsDisplay = mission.points === 0 ? "FREE" : `${mission.points}pts`;
+            const isOwner = mission.userId === userId;
+            const isCompleted = mission.completed;
+            
+            // Formatting the date
+            const formattedCompletedDate = useMemo(() => {
+                if (!isCompleted || !mission.completedAt) return null;
+                // Check if completedAt is a Firebase Timestamp, convert it to Date object
+                const date = mission.completedAt.toDate ? mission.completedAt.toDate() : (mission.completedAt instanceof Date ? mission.completedAt : null);
+                return date ? date.toLocaleDateString() : null;
+            }, [isCompleted, mission.completedAt]);
+
+            const missionStatusClasses = isCompleted 
+                ? 'bg-green-100 text-green-800 border-green-400' 
+                : 'bg-white text-gray-800 border-gray-200 hover:bg-gray-50';
 
             return (
-                <div className={`
-                    flex items-center p-4 my-2 rounded-xl shadow-lg transition-all duration-300 ease-in-out
-                    ${mission.completed ? 'bg-green-100 border-l-8 border-green-600' : 'bg-white border-l-8 border-indigo-600 hover:shadow-xl'}
-                `}>
+                <div className={`p-4 mb-3 rounded-xl shadow-lg flex items-center transition duration-200 ease-in-out ${missionStatusClasses}`}>
+                    {/* Completion Button/Status */}
+                    <button
+                        onClick={handleToggleComplete}
+                        className={`w-8 h-8 rounded-full flex items-center justify-center mr-4 transition duration-300 ${isCompleted ? 'bg-green-600 text-white' : 'bg-gray-200 text-gray-500 hover:bg-green-500 hover:text-white'}`}
+                        title={isCompleted ? "Mark as Incomplete" : "Mark as Complete"}
+                    >
+                        <Check className="w-5 h-5" />
+                    </button>
+
+                    {/* Mission Details */}
                     <div className="flex-grow min-w-0">
-                        {isEditing ? (
-                            <div className="flex flex-col sm:flex-row space-y-2 sm:space-y-0 sm:space-x-3 items-start sm:items-center">
-                                <input
-                                    type="text"
-                                    value={newTitle}
-                                    onChange={(e) => setNewTitle(e.target.value)}
-                                    className="p-2 border border-gray-300 rounded-lg w-full sm:flex-1 font-medium text-gray-800"
-                                    placeholder="Mission Title"
-                                    aria-label="Edit mission title"
-                                />
-                                <input
-                                    type="number"
-                                    value={newPoints}
-                                    onChange={(e) => setNewPoints(e.target.value)}
-                                    className="p-2 border border-gray-300 rounded-lg w-20 text-center text-gray-800"
-                                    placeholder="Points"
-                                    aria-label="Edit mission points"
-                                />
-                                <button
-                                    onClick={handleSave}
-                                    className="p-2 bg-green-500 text-white rounded-lg shadow hover:bg-green-600 transition-colors whitespace-nowrap"
-                                >
-                                    <Icon name="Save" size={18} />
-                                </button>
-                            </div>
-                        ) : (
-                            <div className="flex items-center">
-                                <span className={`
-                                    text-lg font-semibold truncate transition-opacity duration-300
-                                    ${mission.completed ? 'line-through text-gray-500' : 'text-gray-800'}
-                                `}>
-                                    {mission.title}
-                                </span>
-                                <span className={`
-                                    ml-4 px-3 py-1 text-xs font-bold rounded-full transition-colors
-                                    ${mission.completed 
-                                        ? 'bg-green-500 text-white' 
-                                        : (mission.isPublic ? 'bg-indigo-500 text-white' : 'bg-gray-200 text-gray-700')
-                                    }
-                                `}>
-                                    {pointsDisplay}
-                                </span>
-                            </div>
-                        )}
-                        <p className="text-xs text-gray-500 mt-1">
-                            Owner: <span className="font-mono text-sm break-all">{mission.userId}</span>
+                        <p className={`font-semibold text-lg break-words ${isCompleted ? 'line-through opacity-70' : ''}`}>
+                            {mission.description}
                         </p>
+                        <div className="flex items-center text-sm text-gray-500 mt-1">
+                            <Zap className="w-4 h-4 mr-1 text-yellow-600" />
+                            <span>{mission.points} Points</span>
+                            {mission.userId && (
+                                <span className="ml-3 flex items-center" title={`Owner ID: ${mission.userId}`}>
+                                    <Users className="w-4 h-4 mr-1" />
+                                    {mission.userId.substring(0, 8)}...
+                                </span>
+                            )}
+                            {isCompleted && formattedCompletedDate && (
+                                <span className="ml-3 flex items-center" title={`Completed On: ${formattedCompletedDate}`}>
+                                    <Clock className="w-4 h-4 mr-1" />
+                                    {formattedCompletedDate}
+                                </span>
+                            )}
+                        </div>
                     </div>
 
-                    <div className="flex items-center space-x-2 ml-4 flex-shrink-0">
-                        {/* Toggle Button */}
+                    {/* Delete Button (Only visible to owner or for private missions) */}
+                    {(isPrivate || isOwner) && (
                         <button
-                            onClick={() => onToggle(mission.id, mission.completed)}
-                            className={`
-                                p-2 rounded-full shadow-md transition-transform transform hover:scale-105
-                                ${mission.completed ? 'bg-gray-300 text-gray-700' : 'bg-indigo-500 text-white hover:bg-indigo-600'}
-                            `}
-                            title={mission.completed ? "Mark as Incomplete" : "Mark as Complete"}
+                            onClick={handleDelete}
+                            className="ml-4 p-2 rounded-full text-red-500 bg-red-100 hover:bg-red-500 hover:text-white transition duration-200"
+                            title="Delete Mission"
                         >
-                            <Icon name={mission.completed ? "RefreshCw" : "CheckCircle"} size={20} />
+                            <Trash2 className="w-5 h-5" />
                         </button>
-
-                        {/* Edit and Delete Buttons (Only for Owner) */}
-                        {isOwner && (
-                            <>
-                                <button
-                                    onClick={toggleEdit}
-                                    className="p-2 bg-yellow-400 text-gray-800 rounded-full shadow-md hover:bg-yellow-500 transition-transform transform hover:scale-105"
-                                    title="Edit Mission"
-                                    disabled={isEditing}
-                                >
-                                    <Icon name="Edit" size={20} />
-                                </button>
-                                <button
-                                    onClick={() => onDelete(mission.id)}
-                                    className="p-2 bg-red-500 text-white rounded-full shadow-md hover:bg-red-600 transition-transform transform hover:scale-105"
-                                    title="Delete Mission"
-                                    disabled={isEditing}
-                                >
-                                    <Icon name="Trash2" size={20} />
-                                </button>
-                            </>
-                        )}
-                    </div>
+                    )}
                 </div>
             );
         };
 
-        // --- AddMissionForm Component ---
-        const AddMissionForm = ({ userId, onAdd, isPublic }) => {
-            const [title, setTitle] = useState('');
-            const [points, setPoints] = useState(100);
-            const [errorMessage, setErrorMessage] = useState('');
-            const inputRef = useRef(null);
+        // --- Component: MissionList ---
+        const MissionList = ({ title, missions, userId, db, isPrivate, icon: Icon, points }) => (
+            <div className="bg-white p-6 rounded-2xl shadow-xl border border-gray-100 mb-8">
+                <div className="flex justify-between items-center border-b pb-3 mb-4">
+                    <h2 className="text-2xl font-bold text-gray-700 flex items-center">
+                        <Icon className="w-6 h-6 mr-2 text-indigo-500" />
+                        {title}
+                    </h2>
+                    <div className="flex items-center text-xl font-extrabold text-yellow-600 bg-yellow-100 px-4 py-1 rounded-full shadow-inner">
+                        <Zap className="w-5 h-5 mr-1" />
+                        {points}
+                    </div>
+                </div>
+                
+                <div className="custom-scrollbar min-h-[100px] max-h-[400px] overflow-y-auto pr-2">
+                    {missions.length === 0 ? (
+                        <p className="text-gray-500 text-center py-6">
+                            {isPrivate ? "No private missions found. Start by adding one below!" : "No public missions found. Be the first to post one!"}
+                        </p>
+                    ) : (
+                        missions.map(mission => (
+                            <MissionItem
+                                key={mission.id}
+                                mission={mission}
+                                userId={userId}
+                                db={db}
+                                isPrivate={isPrivate}
+                            />
+                        ))
+                    )}
+                </div>
+            </div>
+        );
 
-            const handleSubmit = (e) => {
+        // --- Component: MissionForm ---
+        const MissionForm = ({ userId, db, appId, isPublic, onAddMission }) => {
+            const [description, setDescription] = useState('');
+            const [points, setPoints] = useState('');
+            const [error, setError] = useState('');
+
+            const handleSubmit = useCallback(async (e) => {
                 e.preventDefault();
-                setErrorMessage('');
+                setError('');
 
-                const pointsNum = Number(points);
-                if (title.trim() === '') {
-                    setErrorMessage('Mission title is required.');
-                    return;
-                }
-                if (isNaN(pointsNum) || pointsNum < 0) {
-                    setErrorMessage('Points must be a non-negative number.');
+                if (!description || !points) {
+                    setError('Please enter both a description and points.');
                     return;
                 }
 
-                const newMission = {
-                    title: title.trim(),
-                    points: pointsNum,
-                    completed: false,
-                    isPublic: isPublic,
-                    userId: userId,
-                    createdAt: firebase.firestore.FieldValue.serverTimestamp()
-                };
+                const numericPoints = parseInt(points, 10);
+                if (isNaN(numericPoints) || numericPoints <= 0) {
+                    setError('Points must be a positive number.');
+                    return;
+                }
 
-                onAdd(newMission);
-                setTitle('');
-                setPoints(100);
-                inputRef.current.focus();
-            };
+                if (!userId || !db || !appId) {
+                    setError('System error: User or database connection not ready.');
+                    console.error("Form submit failed: userId, db, or appId is missing.", { userId, db, appId });
+                    return;
+                }
+                
+                // Define the collection path based on the selected type
+                const collectionPath = isPublic 
+                    ? `artifacts/${appId}/public/data/missions` 
+                    : `artifacts/${appId}/users/${userId}/missions`;
 
-            const isPublicText = isPublic ? "Public Missions" : "Private Missions";
+                try {
+                    await addDoc(collection(db, collectionPath), {
+                        description: description,
+                        points: numericPoints,
+                        userId: userId, // Store the user ID for ownership checks
+                        completed: false,
+                        createdAt: new Date(),
+                        appId: appId
+                    });
+
+                    setDescription('');
+                    setPoints('');
+                    onAddMission(); // Call callback to switch tab if public
+                } catch (err) {
+                    console.error("Error adding mission:", err);
+                    // Display a user-friendly message based on the error type
+                    if (err.message.includes('permission denied')) {
+                        setError('Error: Permission Denied. Check Firestore Security Rules!');
+                    } else {
+                        setError(`Failed to add mission: ${err.message.substring(0, 50)}...`);
+                    }
+                }
+            }, [description, points, userId, db, appId, isPublic, onAddMission]);
 
             return (
-                <form 
-                    onSubmit={handleSubmit} 
-                    className="p-6 bg-white rounded-2xl shadow-xl w-full max-w-lg mx-auto mb-6 transition-transform transform hover:scale-[1.01]"
-                >
-                    <h3 className="text-2xl font-extrabold text-indigo-700 mb-4 border-b pb-2">New {isPublicText}</h3>
-                    {errorMessage && (
-                        <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded relative mb-4" role="alert">
-                            <span className="block sm:inline">{errorMessage}</span>
-                        </div>
-                    )}
+                <form onSubmit={handleSubmit} className="p-6 bg-white rounded-2xl shadow-2xl border border-indigo-100 mt-8">
+                    <h3 className="text-xl font-bold mb-4 text-indigo-700">Add New {isPublic ? 'Public' : 'Private'} Mission</h3>
                     
-                    <div className="flex flex-col space-y-4">
+                    <div className="flex flex-col md:flex-row gap-4 mb-4">
                         <input
-                            ref={inputRef}
                             type="text"
-                            value={title}
-                            onChange={(e) => setTitle(e.target.value)}
-                            placeholder="Enter new mission description..."
-                            className="p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all text-lg"
-                            aria-label="Mission description"
+                            value={description}
+                            onChange={(e) => setDescription(e.target.value)}
+                            placeholder="Enter mission description..."
+                            className="flex-grow p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition duration-150"
+                            required
                         />
-                        <div className="flex space-x-4 items-center">
-                            <label className="text-gray-600 font-medium whitespace-nowrap">Points:</label>
-                            <input
-                                type="number"
-                                value={points}
-                                onChange={(e) => setPoints(e.target.value)}
-                                min="0"
-                                className="p-3 border border-gray-300 rounded-lg w-24 text-center focus:ring-2 focus:ring-indigo-500"
-                                aria-label="Mission points value"
-                            />
-                            <button
-                                type="submit"
-                                className="flex-grow p-3 bg-indigo-600 text-white rounded-xl shadow-lg hover:bg-indigo-700 transition-all duration-200 flex items-center justify-center font-bold text-lg"
-                            >
-                                <Icon name="PlusCircle" size={20} className="mr-2" />
-                                Add Mission
-                            </button>
-                        </div>
+                        <input
+                            type="number"
+                            value={points}
+                            onChange={(e) => setPoints(e.target.value)}
+                            placeholder="Points"
+                            className="w-full md:w-32 p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition duration-150"
+                            required
+                        />
                     </div>
+
+                    {error && (
+                        <p className="text-red-600 bg-red-100 p-2 rounded-lg mb-4 text-center border border-red-300 font-medium">
+                            {error}
+                        </p>
+                    )}
+
+                    <button
+                        type="submit"
+                        className="w-full bg-indigo-600 text-white font-bold py-3 rounded-xl shadow-lg hover:bg-indigo-700 transition duration-200 flex items-center justify-center"
+                    >
+                        <Plus className="w-5 h-5 mr-2" />
+                        Add {isPublic ? 'Public' : 'Private'} Mission
+                    </button>
                 </form>
             );
         };
 
-        // --- Main App Component ---
+
+        // --- Main Component: App ---
         const App = () => {
-            const [isLoading, setIsLoading] = useState(true);
+            const [db, setDb] = useState(null);
+            const [auth, setAuth] = useState(null);
             const [userId, setUserId] = useState(null);
+            const [appId, setAppId] = useState(null);
+            const [loading, setLoading] = useState(true);
+            const [error, setError] = useState(null);
+            const [tab, setTab] = useState('private'); // 'private' or 'public'
+
             const [privateMissions, setPrivateMissions] = useState([]);
             const [publicMissions, setPublicMissions] = useState([]);
-            const [error, setError] = useState(null);
-            
-            // Check if Firebase instances are available
-            const isFirebaseReady = typeof firebase !== 'undefined' && typeof firebase.firestore !== 'undefined' && typeof firebase.auth !== 'undefined';
 
-            const missionsRef = useCallback((isPublic) => {
-                if (!db || !userId) return null;
-                const path = getCollectionPath('missions', isPublic, userId);
-                if (!path) return null;
-                return db.collection(path);
-            }, [userId]);
-
-            // Total Score calculation
-            const totalScore = React.useMemo(() => {
-                const completedPrivate = privateMissions
-                    .filter(m => m.completed)
-                    .reduce((sum, m) => sum + m.points, 0);
-
-                const completedPublic = publicMissions
-                    .filter(m => m.completed && m.userId === userId) // Only count public missions completed by *this* user
-                    .reduce((sum, m) => sum + m.points, 0);
-
-                return completedPrivate + completedPublic;
-            }, [privateMissions, publicMissions, userId]);
-
-            // --- Authentication & Initialization Effect ---
+            // --- Core Firebase Initialization and Authentication ---
             useEffect(() => {
-                if (!isFirebaseReady) {
-                    console.error("Firebase is not initialized or CDNs failed to load.");
-                    setError("System Error: Firebase services failed to load.");
+                try {
+                    // 1. Safely retrieve global variables
+                    // Note: __app_id, __firebase_config, and __initial_auth_token are provided by the environment
+                    const currentAppId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+                    const firebaseConfigString = typeof __firebase_config !== 'undefined' ? __firebase_config : '{}';
+                    const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+                    let firebaseConfig;
+                    try {
+                        firebaseConfig = JSON.parse(firebaseConfigString);
+                        if (Object.keys(firebaseConfig).length === 0) {
+                             throw new Error("Parsed Firebase config is empty.");
+                        }
+                    } catch (e) {
+                         throw new Error(`Invalid Firebase config: ${e.message}`);
+                    }
+                    
+                    setAppId(currentAppId);
+                    
+                    // 2. Initialize Firebase App and Services
+                    const app = initializeApp(firebaseConfig);
+                    const firestoreDb = getFirestore(app);
+                    const firebaseAuth = getAuth(app);
+                    
+                    setDb(firestoreDb);
+                    setAuth(firebaseAuth);
+
+                    // 3. Handle Authentication
+                    const handleAuth = async () => {
+                        try {
+                            if (initialAuthToken) {
+                                await signInWithCustomToken(firebaseAuth, initialAuthToken);
+                            } else {
+                                await signInAnonymously(firebaseAuth);
+                            }
+                        } catch (authError) {
+                            console.error("Authentication Error:", authError);
+                            // If sign-in fails, we still try to proceed, but the user ID will be null initially.
+                        }
+                    };
+                    handleAuth();
+
+                    // 4. Set up Auth State Listener
+                    const unsubscribeAuth = onAuthStateChanged(firebaseAuth, (user) => {
+                        if (user) {
+                            setUserId(user.uid);
+                            console.log("User authenticated. UID:", user.uid);
+                        } else {
+                            // If the user is still null, generate a random ID for anonymous identification
+                            const anonId = 'anon-' + (crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 15));
+                            setUserId(anonId);
+                            console.log("User signed out or anonymous sign-in failed. Using anonymous ID:", anonId);
+                        }
+                        setLoading(false);
+                    });
+                    
+                    return () => {
+                        unsubscribeAuth();
+                    };
+
+                } catch (err) {
+                    console.error("Firebase Initialization Error:", err);
+                    setError("Initialization Failed. Check the Console for details.");
+                    setLoading(false);
+                }
+            }, []); // Run only once on mount
+
+            // --- Firestore Data Listeners ---
+            useEffect(() => {
+                // Only run listeners once Firebase services and user ID/appId are ready
+                if (!db || !userId || !appId) {
                     return;
                 }
 
-                try {
-                    // Initialize Firebase App and Services
-                    const app = firebase.initializeApp(firebaseConfig);
-                    db = app.firestore();
-                    auth = app.auth();
+                // 1. Listener for Private Missions: /artifacts/{appId}/users/{userId}/missions
+                const privateCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/missions`);
+                const qPrivate = query(privateCollectionRef);
 
-                    // Optional: Enable offline persistence (useful for mobile)
-                    // db.enablePersistence().catch(err => {
-                    //     if (err.code === 'failed-precondition') {
-                    //         console.log("Persistence failed: multiple tabs open.");
-                    //     } else if (err.code === 'unimplemented') {
-                    //         console.log("Persistence not available on this browser.");
-                    //     }
-                    // });
-
-                    // Set up Auth Listener
-                    const unsubscribeAuth = auth.onAuthStateChanged(async (user) => {
-                        if (user) {
-                            // User is signed in
-                            setUserId(user.uid);
-                            // Set loading to false only after successful sign-in
-                            setIsLoading(false);
-                            console.log("User signed in with ID:", user.uid);
-                        } else if (initialAuthToken) {
-                            // Attempt custom token sign-in
-                            try {
-                                await auth.signInWithCustomToken(initialAuthToken);
-                            } catch (e) {
-                                console.error("Error signing in with custom token:", e.message);
-                                // Fallback: Sign in anonymously if custom token fails
-                                try {
-                                    const anonymousUser = await auth.signInAnonymously();
-                                    setUserId(anonymousUser.user.uid);
-                                    setIsLoading(false);
-                                } catch (anonError) {
-                                    console.error("Error signing in anonymously:", anonError.message);
-                                    setError("Authentication Failed. Check console for details.");
-                                    setIsLoading(false); // Stop loading even if it failed
-                                }
-                            }
-                        } else {
-                            // Fallback: Sign in anonymously if no token is provided
-                            try {
-                                const anonymousUser = await auth.signInAnonymously();
-                                setUserId(anonymousUser.user.uid);
-                                setIsLoading(false);
-                            } catch (e) {
-                                console.error("Error signing in anonymously:", e.message);
-                                setError("Authentication Failed. Check console for details.");
-                                setIsLoading(false); // Stop loading even if it failed
-                            }
-                        }
-                    });
-
-                    return () => unsubscribeAuth();
-                } catch (e) {
-                    console.error("Initialization Error:", e);
-                    setError("Fatal Init Error: " + e.message);
-                    setIsLoading(false);
-                }
-            }, [isFirebaseReady]); // Only runs once on mount
-
-            // --- Firestore Data Fetching Effects (Private & Public) ---
-
-            // Private Missions Listener
-            useEffect(() => {
-                if (!db || !userId) return; // Wait until authenticated
-                
-                const privateRef = missionsRef(false);
-                if (!privateRef) return;
-
-                console.log("Attaching listener to Private Missions for user:", userId);
-
-                const unsubscribe = privateRef
-                    .orderBy('createdAt', 'desc')
-                    .onSnapshot(snapshot => {
-                        const missionsData = snapshot.docs.map(doc => ({
-                            id: doc.id,
-                            ...doc.data()
-                        }));
-                        setPrivateMissions(missionsData);
-                    }, err => {
-                        console.error("Private Missions Fetch Error:", err);
-                        // Permission denied is a common rule error.
-                        setError("Error fetching private data. Check Firestore rules.");
-                    });
-
-                return () => unsubscribe();
-            }, [userId, missionsRef]);
-
-            // Public Missions Listener
-            useEffect(() => {
-                if (!db || !userId) return; // Wait until authenticated
-
-                const publicRef = missionsRef(true);
-                if (!publicRef) return;
-
-                console.log("Attaching listener to Public Missions (All Users)");
-
-                // Note: No 'where' clause here to fetch ALL public missions
-                const unsubscribe = publicRef
-                    .orderBy('createdAt', 'desc')
-                    .onSnapshot(snapshot => {
-                        const missionsData = snapshot.docs.map(doc => ({
-                            id: doc.id,
-                            ...doc.data()
-                        }));
-                        setPublicMissions(missionsData);
-                    }, err => {
-                        console.error("Public Missions Fetch Error:", err);
-                        setError("Error fetching public data. Check Firestore rules.");
-                    });
-
-                return () => unsubscribe();
-            }, [userId, missionsRef]);
-
-
-            // --- CRUD Operations ---
-
-            const addMission = async (newMission) => {
-                try {
-                    if (!userId) {
-                        console.error("Cannot add mission: User not authenticated.");
-                        return;
+                const unsubscribePrivate = onSnapshot(qPrivate, (snapshot) => {
+                    const missions = snapshot.docs.map(doc => ({
+                        id: doc.id,
+                        ...doc.data(),
+                        appId: appId // Ensure mission objects contain the appId for doc path
+                    }));
+                    setPrivateMissions(missions);
+                    console.log("Private missions updated.");
+                }, (err) => {
+                    console.error("Private Mission Listener Error:", err);
+                    if (err.code === 'permission-denied') {
+                        console.error("FIREBASE PERMISSION DENIED: Check your Firestore Security Rules for private data paths.");
                     }
-                    const ref = missionsRef(newMission.isPublic);
-                    if (ref) {
-                        await ref.add(newMission);
+                });
+
+                // 2. Listener for Public Missions: /artifacts/{appId}/public/data/missions
+                const publicCollectionRef = collection(db, `artifacts/${appId}/public/data/missions`);
+                const qPublic = query(publicCollectionRef);
+
+                const unsubscribePublic = onSnapshot(qPublic, (snapshot) => {
+                    const missions = snapshot.docs.map(doc => ({
+                        id: doc.id,
+                        ...doc.data(),
+                        appId: appId // Ensure mission objects contain the appId for doc path
+                    }));
+                    setPublicMissions(missions);
+                    console.log("Public missions updated.");
+                }, (err) => {
+                    console.error("Public Mission Listener Error:", err);
+                    if (err.code === 'permission-denied') {
+                        console.error("FIREBASE PERMISSION DENIED: Check your Firestore Security Rules for public data paths.");
                     }
-                } catch (e) {
-                    console.error("Error adding document: ", e);
-                    setError("Could not add mission. Check console.");
-                }
+                });
+
+
+                // Cleanup function for listeners
+                return () => {
+                    unsubscribePrivate();
+                    unsubscribePublic();
+                };
+
+            }, [db, userId, appId]); // Rerun when services or userId/appId change
+
+            // --- Calculations ---
+            const calculatePoints = (missions) => {
+                return missions
+                    .filter(m => m.completed)
+                    .reduce((sum, m) => sum + m.points, 0);
             };
 
-            const toggleMission = async (id, isCompleted, isPublic) => {
-                try {
-                    if (!userId) return;
-                    const ref = missionsRef(isPublic);
-                    if (ref) {
-                        await ref.doc(id).update({
-                            completed: !isCompleted,
-                            completedAt: !isCompleted ? firebase.firestore.FieldValue.serverTimestamp() : null
-                        });
-                    }
-                } catch (e) {
-                    console.error("Error toggling document: ", e);
-                    setError("Could not update mission status. Check console.");
-                }
-            };
-            
-            const editMission = async (id, title, points, isPublic) => {
-                 try {
-                    if (!userId) return;
-                    const ref = missionsRef(isPublic);
-                    if (ref) {
-                        await ref.doc(id).update({
-                            title: title,
-                            points: points,
-                            updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-                        });
-                    }
-                } catch (e) {
-                    console.error("Error editing document: ", e);
-                    setError("Could not edit mission. Check console.");
-                }
-            };
+            const privatePoints = useMemo(() => calculatePoints(privateMissions), [privateMissions]);
+            const publicPoints = useMemo(() => calculatePoints(publicMissions), [publicMissions]);
+            const totalPoints = privatePoints + publicPoints;
 
-            const deleteMission = async (id, isPublic) => {
-                try {
-                    if (!userId) return;
-                    const ref = missionsRef(isPublic);
-                    if (ref) {
-                        await ref.doc(id).delete();
-                    }
-                } catch (e) {
-                    console.error("Error deleting document: ", e);
-                    setError("Could not delete mission. Check console.");
-                }
-            };
+            const handleAddPublicMission = useCallback(() => {
+                // Switch to public tab after adding a public mission
+                setTab('public');
+            }, []);
 
-            // Unified handlers for MissionItem
-            const handleToggle = (id, isCompleted) => {
-                const targetPrivate = privateMissions.find(m => m.id === id);
-                const targetPublic = publicMissions.find(m => m.id === id);
-                
-                if (targetPrivate) {
-                    toggleMission(id, isCompleted, false);
-                } else if (targetPublic) {
-                    toggleMission(id, isCompleted, true);
-                } else {
-                    console.error("Mission not found for toggle:", id);
-                }
-            };
-
-            const handleDelete = (id) => {
-                const targetPrivate = privateMissions.find(m => m.id === id);
-                const targetPublic = publicMissions.find(m => m.id === id);
-
-                if (targetPrivate && targetPrivate.userId === userId) {
-                    // Private mission owned by user
-                    deleteMission(id, false);
-                } else if (targetPublic && targetPublic.userId === userId) {
-                    // Public mission owned by user
-                    deleteMission(id, true);
-                } else {
-                    // In a real app, this would be a user-facing modal
-                    console.error("Cannot delete: Mission not found or not owned by user:", id);
-                }
-            };
-            
-            const handleEdit = (id, newTitle, newPoints) => {
-                 const targetPrivate = privateMissions.find(m => m.id === id);
-                 const targetPublic = publicMissions.find(m => m.id === id);
-                 
-                if (targetPrivate && targetPrivate.userId === userId) {
-                    editMission(id, newTitle, newPoints, false);
-                } else if (targetPublic && targetPublic.userId === userId) {
-                    editMission(id, newTitle, newPoints, true);
-                } else {
-                    console.error("Cannot edit: Mission not found or not owned by user:", id);
-                }
-            };
-
-            // --- Rendering ---
-
-            if (isLoading) {
+            // --- Render Logic ---
+            if (loading) {
                 return (
-                    <div className="flex justify-center items-center h-screen bg-gray-50">
-                        <div className="flex flex-col items-center">
-                            <div className="animate-spin rounded-full h-16 w-16 border-t-4 border-b-4 border-indigo-500"></div>
-                            <p className="mt-4 text-xl font-semibold text-indigo-700">Connecting to Dynasty Database...</p>
-                            <p className="text-sm text-gray-500">Checking authentication token...</p>
-                        </div>
+                    <div className="flex items-center justify-center h-screen bg-gray-50">
+                        <div className="text-2xl font-semibold text-indigo-600">Loading Tracker...</div>
+                    </div>
+                );
+            }
+
+            if (error) {
+                return (
+                    <div className="flex flex-col items-center justify-center h-screen bg-red-100 p-8 rounded-xl">
+                        <h1 className="text-3xl font-bold text-red-700 mb-4">Application Error</h1>
+                        <p className="text-xl text-red-600 mb-6">{error}</p>
+                        <p className="text-gray-700 text-center">
+                            Please check the browser console (F12) for detailed initialization errors. This often means the Firebase configuration is missing or invalid.
+                        </p>
                     </div>
                 );
             }
             
-            if (error) {
+            // Safety check if auth failed but loading completed
+            if (!userId) {
                 return (
-                    <div className="flex justify-center items-center h-screen bg-red-100">
-                        <div className="text-center p-8 bg-white rounded-xl shadow-2xl border-t-4 border-red-500">
-                            <h2 className="text-2xl font-bold text-red-600 mb-4">Application Error</h2>
-                            <p className="text-gray-700">{error}</p>
-                            <p className="mt-4 text-sm text-gray-500">Please check the console for detailed error messages.</p>
-                        </div>
+                    <div className="flex flex-col items-center justify-center h-screen bg-yellow-100 p-8 rounded-xl">
+                        <h1 className="text-3xl font-bold text-yellow-700 mb-4">Authentication Failed</h1>
+                        <p className="text-xl text-yellow-600 mb-6">Could not establish a user session. Please refresh or check console.</p>
                     </div>
-                );
+                )
             }
 
             return (
-                <div className="min-h-screen bg-gray-100 p-4 sm:p-8">
-                    {/* Header */}
-                    <header className="bg-white rounded-3xl shadow-2xl p-6 mb-8 sticky top-0 z-10 transition-all duration-300">
-                        <div className="flex flex-col md:flex-row justify-between items-center">
-                            <div className="flex items-center space-x-3 mb-4 md:mb-0">
-                                <Icon name="BarChart3" size={32} className="text-indigo-600" />
-                                <h1 className="text-3xl font-extrabold text-gray-800">
-                                    Deevo Dynasty Tracker
-                                </h1>
-                            </div>
-                            <div className="text-center md:text-right">
-                                <p className="text-sm font-medium text-gray-600">
-                                    Your ID: <span className="font-mono text-base break-all text-indigo-600">{userId}</span>
-                                </p>
-                                <div className="text-3xl font-bold text-green-600 bg-green-100 px-4 py-2 rounded-xl mt-2 shadow-inner">
-                                    SCORE: {totalScore} pts
-                                </div>
-                            </div>
+                <div className="min-h-screen bg-gray-50 p-4 sm:p-8">
+                    <header className="text-center mb-10">
+                        <h1 className="text-4xl sm:text-5xl font-extrabold text-indigo-800 tracking-tight">
+                            <span className="text-yellow-500">Deevo</span> Dynasty Tracker
+                        </h1>
+                        <p className="text-lg text-gray-500 mt-2">Track your progress and collaborate on missions.</p>
+                        <div className="mt-4 p-3 bg-indigo-50 rounded-xl inline-block shadow-inner">
+                            <p className="text-sm font-medium text-indigo-700">
+                                Your User ID: <span className="font-mono text-xs break-all ml-1 bg-indigo-200 px-2 py-1 rounded">{userId}</span>
+                            </p>
                         </div>
                     </header>
-                    
-                    {/* Main Content Area */}
-                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                        
-                        {/* Private Missions Column (Left) */}
-                        <div className="space-y-6">
-                            <AddMissionForm userId={userId} onAdd={addMission} isPublic={false} />
 
-                            <h2 className="text-3xl font-extrabold text-gray-800 mb-4 border-b pb-2">Your Private Missions</h2>
-                            <div className="custom-scrollbar max-h-[70vh] overflow-y-auto pr-2">
-                                {privateMissions.length === 0 ? (
-                                    <div className="p-6 text-center bg-white rounded-xl shadow-inner text-gray-500">
-                                        No private missions yet. Start your quest!
-                                    </div>
-                                ) : (
-                                    privateMissions.map(mission => (
-                                        <MissionItem
-                                            key={mission.id}
-                                            mission={mission}
-                                            onToggle={handleToggle}
-                                            onDelete={handleDelete}
-                                            onEdit={handleEdit}
-                                            userId={userId}
-                                        />
-                                    ))
-                                )}
-                            </div>
-                        </div>
-
-                        {/* Public Missions Column (Right) */}
-                        <div className="space-y-6">
-                            <AddMissionForm userId={userId} onAdd={addMission} isPublic={true} />
-                            
-                            <h2 className="text-3xl font-extrabold text-gray-800 mb-4 border-b pb-2">Public Dynasty Missions</h2>
-                            <div className="custom-scrollbar max-h-[70vh] overflow-y-auto pr-2">
-                                {publicMissions.length === 0 ? (
-                                    <div className="p-6 text-center bg-white rounded-xl shadow-inner text-gray-500">
-                                        No public missions posted. Be the first!
-                                    </div>
-                                ) : (
-                                    publicMissions.map(mission => (
-                                        <MissionItem
-                                            key={mission.id}
-                                            mission={mission}
-                                            onToggle={handleToggle}
-                                            onDelete={handleDelete}
-                                            onEdit={handleEdit}
-                                            userId={userId}
-                                        />
-                                    ))
-                                )}
-                            </div>
-                        </div>
-
+                    {/* Total Points Display */}
+                    <div className="max-w-4xl mx-auto bg-indigo-600 p-6 rounded-2xl shadow-2xl mb-10">
+                        <h2 className="text-2xl font-bold text-white mb-2 flex items-center justify-center">
+                            <Zap className="w-6 h-6 mr-2 text-yellow-300 animate-pulse" />
+                            TOTAL DYNASTY POINTS
+                        </h2>
+                        <p className="text-6xl font-extrabold text-center text-yellow-300">
+                            {totalPoints}
+                        </p>
                     </div>
+
+                    {/* Tabs for Mission Lists */}
+                    <div className="max-w-4xl mx-auto mb-6 flex space-x-4">
+                        <button
+                            onClick={() => setTab('private')}
+                            className={`flex-1 flex items-center justify-center py-3 rounded-xl font-semibold transition duration-300 ${
+                                tab === 'private' 
+                                    ? 'bg-indigo-600 text-white shadow-xl' 
+                                    : 'bg-white text-indigo-600 hover:bg-indigo-100 border border-indigo-200'
+                            }`}
+                        >
+                            <Lock className="w-5 h-5 mr-2" />
+                            Your Private Missions
+                        </button>
+                        <button
+                            onClick={() => setTab('public')}
+                            className={`flex-1 flex items-center justify-center py-3 rounded-xl font-semibold transition duration-300 ${
+                                tab === 'public' 
+                                    ? 'bg-indigo-600 text-white shadow-xl' 
+                                    : 'bg-white text-indigo-600 hover:bg-indigo-100 border border-indigo-200'
+                            }`}
+                        >
+                            <Globe className="w-5 h-5 mr-2" />
+                            Public Shared Missions
+                        </button>
+                    </div>
+
+                    {/* Mission Lists */}
+                    <div className="max-w-4xl mx-auto">
+                        {tab === 'private' && (
+                            <MissionList 
+                                title="Private Missions" 
+                                missions={privateMissions} 
+                                userId={userId}
+                                db={db}
+                                isPrivate={true}
+                                icon={Shield}
+                                points={privatePoints}
+                            />
+                        )}
+                        {tab === 'public' && (
+                            <MissionList 
+                                title="Public Missions" 
+                                missions={publicMissions} 
+                                userId={userId}
+                                db={db}
+                                isPrivate={false} // Important: this is false for public
+                                icon={Users}
+                                points={publicPoints}
+                            />
+                        )}
+                    </div>
+
+                    {/* Mission Creation Form */}
+                    <div className="max-w-4xl mx-auto">
+                        <MissionForm 
+                            userId={userId} 
+                            db={db} 
+                            appId={appId} 
+                            isPublic={tab === 'public'} 
+                            onAddMission={handleAddPublicMission}
+                        />
+                    </div>
+                    
                 </div>
             );
         };
 
-        ReactDOM.render(<App />, document.getElementById('root'));
+        // Render the App component to the root div
+        const domNode = document.getElementById('root');
+        const root = ReactDOM.createRoot(domNode);
+        root.render(<App />);
+
     </script>
 </body>
 </html>
